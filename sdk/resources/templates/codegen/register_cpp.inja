@@ -1,0 +1,46 @@
+//=============================================================================
+// ReXGlue Generated - {{ project }} Function Registration
+//=============================================================================
+
+#include "{{ project }}_init.h"
+#include <rex/system/function_dispatcher.h>
+
+// wwe2k14 patch (Session 77): the registrations as a const table and one loop, not one SetFunction statement per
+// function: 83,000 statements in one function body took 261 s to compile for arm64 at -O3 (over 10 min at -O0), alone
+// on one core at the end of every game library build (22 s on the PC). Same calls in the same order.
+namespace {
+struct RexRegisterEntry {
+  uint32_t guest_address;
+  ::PPCFunc* func;
+};
+#define REX_REGISTER_ENTRY(address, func) RexRegisterEntry{address, func}
+const RexRegisterEntry kRexRegisterTable[] = {
+{% for fn in functions %}{% if not fn.below_code_base or fn.is_import %}    REX_REGISTER_ENTRY({{ fn.address }}, {{ fn.name }}),
+{% endif %}{% endfor %}    REX_REGISTER_ENTRY(0u, nullptr),  // end (keeps the table non-empty)
+};
+#undef REX_REGISTER_ENTRY
+}  // namespace
+
+{% if is_dll %}
+#ifdef _WIN32
+#define REX_MODULE_EXPORT __declspec(dllexport)
+#else
+#define REX_MODULE_EXPORT __attribute__((visibility("default")))
+#endif
+
+extern "C" REX_MODULE_EXPORT
+void ReXModule_Register(rex::runtime::IModuleRegistrar* registrar) {
+{% else %}
+void {{ project }}_RegisterFunctions(rex::runtime::IModuleRegistrar* registrar) {
+{% endif %}
+  for (const RexRegisterEntry* e = kRexRegisterTable; e->func; ++e) registrar->SetFunction(e->guest_address, e->func);
+}
+
+{% if is_dll %}
+// The runtime uses this baked layout for the dispatch table. It must match the
+// constants used by this module's REX_LOOKUP_FUNC macro.
+extern "C" REX_MODULE_EXPORT
+const rex::PPCImageInfo* ReXModule_GetImageInfo() {
+  return &PPCImageConfig;
+}
+{% endif %}

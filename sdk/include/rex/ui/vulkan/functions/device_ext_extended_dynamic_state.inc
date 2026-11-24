@@ -1,0 +1,8 @@
+// VK_EXT_extended_dynamic_state functions (wwe2k14 patch, Session 93, idea 7: only with vulkan_extended_dynamic_state).
+XE_UI_VULKAN_FUNCTION(vkCmdSetCullModeEXT)
+XE_UI_VULKAN_FUNCTION(vkCmdSetFrontFaceEXT)
+XE_UI_VULKAN_FUNCTION(vkCmdSetDepthTestEnableEXT)
+XE_UI_VULKAN_FUNCTION(vkCmdSetDepthWriteEnableEXT)
+XE_UI_VULKAN_FUNCTION(vkCmdSetDepthCompareOpEXT)
+XE_UI_VULKAN_FUNCTION(vkCmdSetStencilTestEnableEXT)
+XE_UI_VULKAN_FUNCTION(vkCmdSetStencilOpEXT)

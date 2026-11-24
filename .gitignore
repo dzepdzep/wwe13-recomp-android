@@ -1,0 +1,37 @@
+# Generated from the game / build output - never commit
+game/generated/
+game/game/
+game/out/
+sdk/out/
+android/apk/out/
+android/apk/debug.keystore
+android/launcher-native/build/
+android/assets/
+*.iso
+*.xex
+# Fetched by tools/fetch_thirdparty.sh
+sdk/thirdparty/libmspack/
+sdk/thirdparty/glslang/
+sdk/thirdparty/FFmpeg/
+sdk/thirdparty/tomlplusplus/
+sdk/thirdparty/simde/
+sdk/thirdparty/xxHash/
+sdk/thirdparty/spdlog/
+sdk/thirdparty/fmt/
+sdk/thirdparty/catch2/
+sdk/thirdparty/utfcpp/
+sdk/thirdparty/vulkan-headers/
+sdk/thirdparty/vulkan-loader/
+sdk/thirdparty/moltenvk/
+sdk/thirdparty/vulkan-memory-allocator/
+sdk/thirdparty/imgui/
+sdk/thirdparty/spirv-tools/
+sdk/thirdparty/spirv-headers/
+sdk/thirdparty/cli11/
+sdk/thirdparty/o1heap/
+sdk/thirdparty/sdl3/
+sdk/thirdparty/inja/
+sdk/thirdparty/tracy/
+sdk/thirdparty/libadrenotools/
+sdk/thirdparty/FFmpeg/
+sdk/thirdparty/catch2/

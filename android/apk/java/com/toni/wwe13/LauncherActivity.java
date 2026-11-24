@@ -1,0 +1,1195 @@
+package com.toni.wwe13;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.AssetManager;
+import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.ParcelFileDescriptor;
+import android.provider.OpenableColumns;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.Spinner;
+import android.widget.TextView;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * WWE '13 launcher: game file setup (disc image, title update, DLC), settings, custom music, creations and
+ * save backups. "Start the game directly" skips it; the icon's long-press "Settings" shortcut always opens it.
+ */
+public class LauncherActivity extends Activity {
+    private static final int REQ_ISO = 1;
+    private static final int REQ_PACKAGE = 2;
+    private static final int REQ_SONGS = 3;
+    private static final int REQ_CREATIONS = 4;
+    private static final int REQ_MOD = 5;
+    private static final int REQ_SYNC_NEW = 6;
+    private static final int REQ_SYNC_OPEN = 7;
+
+    private static final String[] RES_LABELS = {"480p (fastest)", "576p", "720p (original)", "1080p", "1440p (sharpest)"};
+    private static final String[] FPS_LABELS = {"60 FPS, entrances at 30 (like the original)", "60 FPS everywhere (recommended)", "Lock matches to 30 FPS (cooler, longer battery)"};
+    private static final String BUNDLED_DRIVER = "Turnip_T30";
+    private static final int REQ_DRIVER = 8;
+    private static final int REQ_K14 = 9;
+    private static final String K14_MOD = "WWE 2K14 superstars";
+    private static final String[] LANG_LABELS = {"English", "German", "French", "Spanish", "Italian"};
+    private static final int[] LANG_IDS = {1, 3, 4, 5, 6};
+
+    private static final int BG = 0xFF101014;
+    private static final int CARD = 0xFF1B1B22;
+    private static final int ACCENT = 0xFFD7262E;
+    private static final int TEXT = 0xFFEDEDED;
+    private static final int DIM = 0xFF9A9AA6;
+
+    private SharedPreferences prefs;
+    private File root;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    private TextView statusText;
+    private Button playButton;
+    private LinearLayout songList;
+    private LinearLayout creationList;
+    private LinearLayout backupList;
+    private LinearLayout modList;
+    private TextView syncStatus;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        prefs = getSharedPreferences("launcher", MODE_PRIVATE);
+        root = getExternalFilesDir(null);
+        LauncherNative.init(root.getAbsolutePath());
+        installBundledFiles();
+
+        boolean openedAsSettings = getIntent() != null && getIntent().getComponent() != null
+                && getIntent().getComponent().getClassName().endsWith("SettingsAlias");
+        if (!openedAsSettings && prefs.getBoolean("skip_launcher", false) && gameReady()) {
+            if (Features.EXTRAS && SaveSync.isSetUp(this) && prefs.getBoolean("sync_auto", true)) {
+                // Quick sync first; a conflict is left for the launcher screen.
+                setContentView(text("  Syncing saves…", 18, TEXT));
+                new Thread(() -> {
+                    SaveSync.Result r = SaveSync.sync(this, null, false);
+                    handler.post(() -> {
+                        recordSync(r);
+                        if (r.outcome == SaveSync.Outcome.CONFLICT) buildUi(); else startSoon();
+                    });
+                }).start();
+                return;
+            }
+            startSoon();
+            return;
+        }
+        buildUi();
+    }
+
+    // "Start the game directly": a short screen first, where any button or a tap opens the settings instead.
+    private boolean startPending;
+    private final Runnable startRunnable = () -> { if (startPending) { startPending = false; startGame(); } };
+
+    private void startSoon() {
+        TextView t = text("Starting WWE '13…\n\nPress any button or tap for settings", 18, TEXT);
+        t.setGravity(Gravity.CENTER);
+        t.setBackgroundColor(BG);
+        t.setOnClickListener(v -> openSettingsInstead());
+        setContentView(t);
+        startPending = true;
+        handler.postDelayed(startRunnable, 2000);
+    }
+
+    private void openSettingsInstead() {
+        if (!startPending) return;
+        startPending = false;
+        handler.removeCallbacks(startRunnable);
+        buildUi();
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, android.view.KeyEvent event) {
+        if (startPending) {
+            openSettingsInstead();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    // ------------------------------------------------------------------------------------------ first run files
+
+    private void installBundledFiles() {
+        int bundled = 3;  // bump when the bundled files change
+        if (prefs.getInt("bundled_version", 0) >= bundled) return;
+        try {
+            // Turnip 26.3.0-R3 (bundled before) draws broken geometry in matches; T30 draws correctly.
+            deleteTree(new File(getFilesDir(), "drivers/Turnip_v26.3.0-R3"));
+            File drivers = new File(getFilesDir(), "drivers/" + BUNDLED_DRIVER);
+            drivers.mkdirs();
+            copyAsset("drivers/libvulkan_freedreno.bin", new File(drivers, "libvulkan_freedreno.so"));
+            File shaders = new File(root, "shader-cache");
+            shaders.mkdirs();
+            AssetManager am = getAssets();
+            String[] names = am.list("shader-cache");
+            if (names != null) {
+                for (String n : names) {
+                    File dest = new File(shaders, n);
+                    // Keep a cache the game has already grown while playing.
+                    if (!dest.exists() || dest.length() == 0) copyAsset("shader-cache/" + n, dest);
+                }
+            }
+            prefs.edit().putInt("bundled_version", bundled).apply();
+        } catch (Exception e) {
+            // The game still runs with the phone's driver and builds its shader cache while playing.
+        }
+    }
+
+    private void copyAsset(String asset, File dest) throws Exception {
+        try (InputStream in = getAssets().open(asset); OutputStream out = new FileOutputStream(dest)) {
+            copy(in, out);
+        }
+    }
+
+    private static void copy(InputStream in, OutputStream out) throws Exception {
+        byte[] buf = new byte[1 << 20];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+    }
+
+    // ------------------------------------------------------------------------------------------ UI
+
+    private void buildUi() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(BG);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(28), dp(20), dp(28), dp(28));
+        scroll.addView(page);
+
+        TextView title = text("WWE '13", 30, TEXT);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        page.addView(title);
+        page.addView(text("Android port of the WWE '13 recomp", 14, DIM));
+
+        // Play
+        playButton = button("▶  Play", v -> startGame());
+        playButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        page.addView(playButton, matchWidth(dp(14)));
+        CheckBox skip = checkbox("Skip this screen and start the game directly (press any button while it starts to come back here)",
+                prefs.getBoolean("skip_launcher", false), c -> prefs.edit().putBoolean("skip_launcher", c).apply());
+        page.addView(skip);
+        addCrashNotice(page);
+
+        // Game files
+        LinearLayout files = section(page, "Game files");
+        statusText = text("", 15, TEXT);
+        files.addView(statusText);
+        LinearLayout fileButtons = row();
+        fileButtons.addView(button("Install from my disc image (.iso)…", v -> pick(REQ_ISO, false)));
+        fileButtons.addView(button("Add title update or DLC…", v -> pick(REQ_PACKAGE, true)));
+        files.addView(fileButtons);
+        files.addView(text("Use your own WWE '13 Xbox 360 disc image and title update 2.0.1.0. The game is copied into the app, "
+                + "so you can delete the image afterwards.", 13, DIM));
+
+        // Settings
+        LinearLayout settings = section(page, "Settings");
+        settings.addView(spinnerRow("Resolution", RES_LABELS, prefs.getInt("resolution", 2),
+                i -> prefs.edit().putInt("resolution", i).apply()));
+        settings.addView(spinnerRow("Frame rate", FPS_LABELS, prefs.getInt("frame_rate", 1),
+                i -> prefs.edit().putInt("frame_rate", i).apply()));
+        final List<String> driverIds = driverIds();
+        List<String> driverLabels = new ArrayList<>();
+        for (String id : driverIds) driverLabels.add(driverLabel(id));
+        settings.addView(spinnerRow("Graphics driver", driverLabels.toArray(new String[0]),
+                Math.max(0, driverIds.indexOf(currentDriver())),
+                i -> prefs.edit().putString("driver_name", driverIds.get(i)).apply()));
+        settings.addView(button("Add GPU driver (.zip)…", v -> pick(REQ_DRIVER, false)), wrap(dp(4)));
+        int langIndex = 0;
+        int lang = LauncherNative.getLanguage();
+        for (int i = 0; i < LANG_IDS.length; ++i) if (LANG_IDS[i] == lang) langIndex = i;
+        settings.addView(spinnerRow("Game language", LANG_LABELS, langIndex, i -> {
+            String err = LauncherNative.setLanguage(LANG_IDS[i]);
+            if (!err.isEmpty()) toastDialog(err);
+        }));
+        settings.addView(checkbox("Faster anti-aliasing (2x instead of 4x)", prefs.getBoolean("aa_faster", false),
+                c -> prefs.edit().putBoolean("aa_faster", c).apply()));
+        settings.addView(checkbox("Stretch the picture to fill the screen", prefs.getBoolean("stretch", false),
+                c -> prefs.edit().putBoolean("stretch", c).apply()));
+        settings.addView(checkbox("Unlock all superstars, arenas and attires (your save is not changed)", prefs.getBoolean("unlock_all", false),
+                c -> prefs.edit().putBoolean("unlock_all", c).apply()));
+        if (Features.EXTRAS)
+            settings.addView(checkbox("Training mode: the CPU never reverses (plays on a copy of your save, your real save is not changed)",
+                    prefs.getBoolean("training", false), c -> prefs.edit().putBoolean("training", c).apply()));
+        settings.addView(checkbox("Show an FPS counter in the game", prefs.getBoolean("show_fps", false),
+                c -> prefs.edit().putBoolean("show_fps", c).apply()));
+        settings.addView(checkbox("Back up my saves before each start", prefs.getBoolean("auto_backup", true),
+                c -> prefs.edit().putBoolean("auto_backup", c).apply()));
+        settings.addView(text("The first start prepares the game's graphics shaders (about 25 seconds on a black screen) so "
+                + "menus and matches don't stutter. Later starts reuse them and take about a second.", 13, DIM));
+
+        // Music
+        LinearLayout music = section(page, "Custom music (entrance music)");
+        music.addView(text("Songs you add here can be used as entrance music: Creations → Entrance → Finalize → Music → "
+                + "User Playlist. MP3, FLAC, OGG and WAV.", 13, DIM));
+        music.addView(button("Add songs…", v -> pick(REQ_SONGS, true)), wrap(dp(8)));
+        songList = new LinearLayout(this);
+        songList.setOrientation(LinearLayout.VERTICAL);
+        music.addView(songList);
+
+        if (Features.EXTRAS) {
+            // Creations (mods)
+            LinearLayout mods = section(page, "Creations and mods");
+            mods.addView(text("Install community creations: Superstars (CAWs), entrances, arenas and logos "
+                    + "(Xbox 360 creation packages). Your saves are backed up first.", 13, DIM));
+            mods.addView(button("Import creations…", v -> pick(REQ_CREATIONS, true)), wrap(dp(8)));
+            creationList = new LinearLayout(this);
+            creationList.setOrientation(LinearLayout.VERTICAL);
+            mods.addView(creationList);
+
+            // Superstars from WWE 2K14, built on this device from the player's own disc
+            LinearLayout k14 = section(page, "Superstars from WWE 2K14");
+            k14.addView(text("Have WWE 2K14 for Xbox 360? Pick your own disc image (.iso) and the 38 superstars WWE '13 "
+                    + "doesn't have are added as a mod, with their models, names, pictures, titantrons, entrance music, "
+                    + "entrances, movesets and ratings. Nothing is downloaded: everything comes from your disc. It takes "
+                    + "a few minutes and about 1 GB of space. In the game, press R3 on the superstar select screen to "
+                    + "see them.", 13, DIM));
+            k14.addView(button("Port from my WWE 2K14 disc (.iso)…", v -> pick(REQ_K14, false)), wrap(dp(8)));
+
+            // Game file mods
+            LinearLayout gameMods = section(page, "Game file mods");
+            gameMods.addView(text("Mods made for modded Xbox 360 consoles that replace game files: wrestler models "
+                    + "and attires (.pac), titantron videos, arenas and more. Add the mod's .zip; the original "
+                    + "game files are never changed and you can switch mods off at any time. Mods lower in the "
+                    + "list win when two change the same file.", 13, DIM));
+            gameMods.addView(button("Add mod (.zip)…", v -> pick(REQ_MOD, false)), wrap(dp(8)));
+            modList = new LinearLayout(this);
+            modList.setOrientation(LinearLayout.VERTICAL);
+            gameMods.addView(modList);
+
+        }
+
+        // Saves
+        LinearLayout saves = section(page, "Saves");
+        saves.addView(button("Back up my saves now", v -> {
+            String err = LauncherNative.backupSaves();
+            toastDialog(err.isEmpty() ? "Saves backed up." : err);
+            refresh();
+        }), wrap(dp(4)));
+        backupList = new LinearLayout(this);
+        backupList.setOrientation(LinearLayout.VERTICAL);
+        saves.addView(backupList);
+
+        if (Features.EXTRAS) {
+            // Save sync
+            LinearLayout sync = section(page, "Save sync between devices");
+            sync.addView(text("Keep one sync file in Google Drive (or any cloud folder). The launcher uploads your "
+                    + "saves when you leave the game and downloads newer saves before you play. The file is a "
+                    + "normal save backup, so the PC launcher can restore it too.", 13, DIM));
+            syncStatus = text("", 14, TEXT);
+            sync.addView(syncStatus);
+            LinearLayout syncButtons = row();
+            syncButtons.addView(button("Create sync file…", v -> {
+                Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("application/zip");
+                i.putExtra(Intent.EXTRA_TITLE, "WWE13-saves-sync.zip");
+                startActivityForResult(i, REQ_SYNC_NEW);
+            }));
+            syncButtons.addView(button("Use existing sync file…", v -> {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");
+                startActivityForResult(i, REQ_SYNC_OPEN);
+            }));
+            syncButtons.addView(button("Sync now", v -> {
+                if (!SaveSync.isSetUp(this)) toastDialog("Create a sync file or choose an existing one first.");
+                else runSync(true);
+            }));
+            sync.addView(syncButtons);
+            sync.addView(checkbox("Sync automatically", prefs.getBoolean("sync_auto", true),
+                    c -> prefs.edit().putBoolean("sync_auto", c).apply()));
+
+        }
+
+        setContentView(scroll);
+        refresh();
+        playButton.requestFocus();
+    }
+
+    private void refresh() {
+        String[] s = LauncherNative.status().split("\n", 2);
+        String[] f = s[0].split("\\|");
+        boolean base = f[0].equals("found");
+        boolean tu = f.length > 1 && f[1].equals("found");
+        StringBuilder sb = new StringBuilder();
+        sb.append(base ? "✔ Game installed" : "✘ Game not installed — install it from your disc image");
+        sb.append("\n");
+        sb.append(tu ? "✔ Title update 2.0.1.0" : "✘ Title update 2.0.1.0 missing — add the title update file");
+        if (f.length > 3) sb.append("\nDLC packs: ").append(f[2]).append(" of ").append(f[3]);
+        statusText.setText(sb.toString());
+        playButton.setEnabled(base && tu);
+        playButton.setAlpha(base && tu ? 1f : 0.4f);
+
+        if (songList != null) songList.removeAllViews();
+        if (songList != null) for (String line : lines(LauncherNative.listSongs())) {
+            final String[] p = line.split("\\|");
+            if (p.length < 2) continue;
+            songList.addView(listItem("♪  " + p[1] + "  (" + (p.length > 2 ? p[2] : "") + ")", "Remove", () -> {
+                LauncherNative.removeSong(p[0]);
+                refresh();
+            }));
+        }
+        if (creationList != null) creationList.removeAllViews();
+        if (creationList != null) for (String line : lines(LauncherNative.listCreations())) {
+            final String[] p = line.split("\\|");
+            if (p.length < 3) continue;
+            creationList.addView(listItem(p[0] + ": " + p[1], "Remove", () -> {
+                String err = LauncherNative.removeCreation(p[2]);
+                if (!err.isEmpty()) toastDialog(err);
+                refresh();
+            }));
+        }
+        refreshMods();
+        if (syncStatus != null) {
+            String name = SaveSync.syncName(this);
+            syncStatus.setText(name.isEmpty() ? "Not set up." : "Sync file: " + name
+                    + "\nLast result: " + prefs.getString("sync_last", "not synced yet"));
+        }
+        backupList.removeAllViews();
+        for (String line : lines(LauncherNative.listBackups())) {
+            final String[] p = line.split("\\|");
+            if (p.length < 2) continue;
+            String label = p[1].replace('T', ' ') + (p.length > 3 && p[3].equals("1") ? "  (automatic)" : "");
+            backupList.addView(listItem(label, "Restore", () -> confirm("Restore this backup? Your current saves are backed up first.", () -> {
+                String err = LauncherNative.restoreBackup(p[0]);
+                toastDialog(err.isEmpty() ? "Backup restored." : err);
+                refresh();
+            })));
+        }
+    }
+
+    private boolean gameReady() {
+        String[] f = LauncherNative.status().split("\n", 2)[0].split("\\|");
+        return f.length > 1 && f[0].equals("found") && f[1].equals("found");
+    }
+
+    // ------------------------------------------------------------------------------------------ launch
+
+    private void startGame() {
+        if (Features.EXTRAS && SaveSync.isSetUp(this) && prefs.getBoolean("sync_auto", true) && !syncedBeforePlay) {
+            syncedBeforePlay = true;
+            runSync(false, this::startGame);
+            return;
+        }
+        try {
+            writeEnabledMods();
+            String[] resArg = {"--resolution=720p", "--resolution=720p", "--resolution=720p", "--resolution=1080p", "--resolution=720p"};
+            String[] internal = {"480", "576", null, "1080", null};
+            int res = prefs.getInt("resolution", 2);
+            StringBuilder opts = new StringBuilder();
+            opts.append(resArg[res]).append('\n');
+            if (res == 4) opts.append("--resolution_scale=2\n");
+            if (prefs.getBoolean("stretch", false)) opts.append("--present_letterbox=false\n");
+            write(new File(root, "launch_options.txt"), opts.toString());
+
+            StringBuilder env = new StringBuilder();
+            env.append("WWE13_INTERNAL_RES=").append(internal[res] != null ? internal[res] : "").append('\n');
+            env.append("WWE13_SCENE_AA=").append(prefs.getBoolean("aa_faster", false) ? "2x" : "").append('\n');
+            int fps = prefs.getInt("frame_rate", 1);
+            env.append("WWE13_KEEP_60=").append(fps == 1 ? "1" : "").append('\n');
+            env.append("WWE13_LOCK_30=").append(fps == 2 ? "1" : "").append('\n');
+            env.append("WWE13_UNLOCK_ALL=").append(prefs.getBoolean("unlock_all", false) ? "1" : "").append('\n');
+            env.append("WWE13_TRAINING=").append(Features.EXTRAS && prefs.getBoolean("training", false) ? "1" : "").append('\n');
+            env.append("WWE13_SHOW_FPS=").append(prefs.getBoolean("show_fps", false) ? "1" : "").append('\n');
+            write(new File(root, "env.txt"), env.toString());
+
+            File drivers = new File(getFilesDir(), "drivers");
+            drivers.mkdirs();
+            write(new File(drivers, "current.txt"), currentDriver());
+
+            if (prefs.getBoolean("auto_backup", true)) LauncherNative.backupSaves();
+        } catch (Exception e) {
+            toastDialog("Could not save the settings: " + e.getMessage());
+            return;
+        }
+        startActivity(new Intent(this, WWE13Activity.class));
+        finish();
+    }
+
+    private boolean syncedBeforePlay = false;
+
+    private void recordSync(SaveSync.Result r) {
+        if (r.outcome == SaveSync.Outcome.NOT_SET_UP) return;
+        String when = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                .format(new java.util.Date());
+        prefs.edit().putString("sync_last", when + " – " + r.message).apply();
+    }
+
+    private void runSync(boolean interactive) {
+        runSync(interactive, null);
+    }
+
+    /** Syncs on a background thread; asks about conflicts; then runs next (if any). */
+    private void runSync(boolean interactive, Runnable next) {
+        AlertDialog wait = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setMessage("Syncing saves…").setCancelable(false).create();
+        wait.show();
+        new Thread(() -> {
+            SaveSync.Result r = SaveSync.sync(this, null, false);
+            handler.post(() -> {
+                wait.dismiss();
+                recordSync(r);
+                if (r.outcome == SaveSync.Outcome.CONFLICT) {
+                    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                            .setTitle("Which saves do you want to keep?")
+                            .setMessage(r.message + " The other ones are kept as a backup.")
+                            .setPositiveButton("This device", (d, w) -> resolveSync(true, next))
+                            .setNegativeButton("Sync file", (d, w) -> resolveSync(false, next))
+                            .setNeutralButton("Decide later", (d, w) -> { if (next != null) next.run(); })
+                            .setCancelable(false).show();
+                } else {
+                    if (interactive) toastDialogThen(r.message, next);
+                    else if (r.outcome == SaveSync.Outcome.FAILED && !r.message.equals(prefs.getString("sync_fail_shown", ""))) {
+                        // (an automatic sync that fails is shown once, not at every start)
+                        prefs.edit().putString("sync_fail_shown", r.message).apply();
+                        boolean gone = r.message.contains("Permission Denial") || r.message.contains("FileNotFound")
+                                || r.message.contains("No such file");
+                        toastDialogThen(gone ? "The sync file can't be reached any more (moved or deleted?). Pick it again "
+                                + "under \"Save sync between devices\" with \"Use existing sync file…\", or make a new one."
+                                : r.message, next);
+                    } else if (next != null) next.run();
+                    if (r.outcome != SaveSync.Outcome.FAILED) prefs.edit().remove("sync_fail_shown").apply();
+                    if (syncStatus != null) refresh();
+                }
+            });
+        }).start();
+    }
+
+    private void resolveSync(boolean keepDevice, Runnable next) {
+        if (!keepDevice) LauncherNative.backupSaves();
+        new Thread(() -> {
+            SaveSync.Result r = SaveSync.sync(this, keepDevice, false);
+            handler.post(() -> {
+                recordSync(r);
+                toastDialogThen(r.message, next);
+                if (syncStatus != null) refresh();
+            });
+        }).start();
+    }
+
+    private void toastDialogThen(String message, Runnable next) {
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setMessage(message).setCancelable(false)
+                .setPositiveButton("OK", (d, w) -> { if (next != null) next.run(); }).show();
+    }
+
+    // ------------------------------------------------------------------------------------------ GPU drivers
+
+    /** Bundled Turnip first, then the phone's own driver, then drivers the player added. */
+    private List<String> driverIds() {
+        List<String> ids = new ArrayList<>();
+        ids.add(BUNDLED_DRIVER);
+        ids.add("system");
+        File[] dirs = new File(getFilesDir(), "drivers").listFiles(File::isDirectory);
+        if (dirs != null) {
+            List<String> extra = new ArrayList<>();
+            for (File d : dirs) if (!d.getName().equals(BUNDLED_DRIVER)) extra.add(d.getName());
+            java.util.Collections.sort(extra, String.CASE_INSENSITIVE_ORDER);
+            ids.addAll(extra);
+        }
+        return ids;
+    }
+
+    private String driverLabel(String id) {
+        if (id.equals(BUNDLED_DRIVER)) return "Turnip T30 (recommended)";
+        if (id.equals("system")) return "Phone's own driver";
+        return id.replace('_', ' ');
+    }
+
+    private String currentDriver() {
+        String id = prefs.getString("driver_name", null);
+        if (id == null) id = prefs.getInt("driver", 0) == 1 ? "system" : BUNDLED_DRIVER;  // older settings
+        if (!id.equals("system") && !new File(getFilesDir(), "drivers/" + id).isDirectory()) id = BUNDLED_DRIVER;
+        return id;
+    }
+
+    /** Installs an adrenotools driver package (.zip with meta.json and the driver library). */
+    private void installDriver(Uri uri) {
+        runLong("Installing the GPU driver", () -> {
+            String file = displayName(uri);
+            String base = file.replaceAll("(?i)\\.zip$", "").replaceAll("[^A-Za-z0-9._-]", "_");
+            if (base.isEmpty() || base.equals("system")) base = "driver";
+            File dest = new File(getFilesDir(), "drivers/" + base);
+            deleteTree(dest);
+            dest.mkdirs();
+            boolean hasLibrary = false;
+            try (ZipInputStream zin = new ZipInputStream(getContentResolver().openInputStream(uri))) {
+                ZipEntry e;
+                while ((e = zin.getNextEntry()) != null) {
+                    if (e.isDirectory()) continue;
+                    String name = e.getName().replace('\\', '/');
+                    name = name.substring(name.lastIndexOf('/') + 1);
+                    if (name.isEmpty()) continue;
+                    if (name.endsWith(".so")) hasLibrary = true;
+                    try (OutputStream os = new FileOutputStream(new File(dest, name))) {
+                        copy(zin, os);
+                    }
+                }
+            }
+            if (!hasLibrary) {
+                deleteTree(dest);
+                return "This zip doesn't contain a GPU driver (no .so library found).";
+            }
+            prefs.edit().putString("driver_name", base).apply();
+            handler.post(this::buildUi);
+            return "Driver installed and selected: " + base.replace('_', ' ')
+                    + "\nIf the game doesn't start or looks wrong, switch back to Turnip T30.";
+        });
+    }
+
+    // ------------------------------------------------------------------------------------------ WWE 2K14 superstars
+
+    /** Runs the porter (libk14port.so, a program in the app's native library folder) on the player's 2K14 disc. */
+    private void portK14(Uri uri) {
+        if (!new File(root, "WWE 13/pac").isDirectory()) {
+            toastDialog("Install WWE '13 first (\"Install from my disc image\"), then port the WWE 2K14 superstars.");
+            return;
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(16), dp(20), dp(8));
+        TextView label = text("Starting…", 14, TEXT);
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        box.addView(label);
+        box.addView(bar);
+        AlertDialog dlg = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Porting WWE 2K14 superstars").setView(box).setCancelable(false).create();
+        dlg.show();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        new Thread(() -> {
+            String result;
+            File out = new File(modsDir(), K14_MOD + ".part");
+            deleteTree(out);
+            try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
+                String iso = "/proc/" + android.os.Process.myPid() + "/fd/" + pfd.getFd();
+                File exe = new File(getApplicationInfo().nativeLibraryDir, "libk14port.so");
+                Process p = new ProcessBuilder(exe.getAbsolutePath(), "--w13", new File(root, "WWE 13").getAbsolutePath(),
+                        "--iso", iso, "--out", out.getAbsolutePath()).redirectErrorStream(true).start();
+                java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+                String line, last = "";
+                int done = -1;
+                while ((line = r.readLine()) != null) {
+                    if (line.startsWith("progress ")) {
+                        String[] f = line.split(" ", 3);
+                        final int pct = Integer.parseInt(f[1]);
+                        final String what = f.length > 2 ? f[2] : "";
+                        handler.post(() -> { bar.setProgress(pct); label.setText(what); });
+                    } else if (line.startsWith("done ")) {
+                        done = Integer.parseInt(line.substring(5).trim());
+                    } else if (line.startsWith("error ")) {
+                        last = line.substring(6);
+                    }
+                }
+                p.waitFor();
+                if (done > 0) {
+                    File dst = new File(modsDir(), K14_MOD);
+                    deleteTree(dst);
+                    if (!out.renameTo(dst)) throw new Exception("couldn't finish the mod folder");
+                    prefs.edit().remove("mod_off_" + K14_MOD).apply();
+                    writeEnabledMods();
+                    result = done + " WWE 2K14 superstars added. In the game, press R3 on the superstar select screen.";
+                } else {
+                    deleteTree(out);
+                    result = "Porting stopped: " + (last.isEmpty() ? "unknown error" : last);
+                }
+            } catch (Exception e) {
+                deleteTree(out);
+                result = "Porting stopped: " + e.getMessage();
+            }
+            final String msg = result;
+            handler.post(() -> {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                dlg.dismiss();
+                toastDialog(msg);
+                refreshMods();
+            });
+        }).start();
+    }
+
+    // ------------------------------------------------------------------------------------------ game file mods
+
+    private File modsDir() {
+        File d = new File(root, "mods");
+        d.mkdirs();
+        return d;
+    }
+
+    /** Mod folders in load order: enabled.txt order first, then any others alphabetically. */
+    private List<String> modOrder() {
+        List<String> order = new ArrayList<>();
+        File[] dirs = modsDir().listFiles(File::isDirectory);
+        List<String> present = new ArrayList<>();
+        if (dirs != null) for (File d : dirs) present.add(d.getName());
+        java.util.Collections.sort(present, String.CASE_INSENSITIVE_ORDER);
+        for (String line : prefs.getString("mod_order", "").split("\n")) {
+            if (present.contains(line) && !order.contains(line)) order.add(line);
+        }
+        for (String n : present) if (!order.contains(n)) order.add(n);
+        return order;
+    }
+
+    private boolean modEnabled(String name) {
+        return !prefs.getBoolean("mod_off_" + name, false);
+    }
+
+    private void saveModOrder(List<String> order) {
+        prefs.edit().putString("mod_order", android.text.TextUtils.join("\n", order)).apply();
+        try {
+            writeEnabledMods();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void writeEnabledMods() throws Exception {
+        StringBuilder sb = new StringBuilder();
+        // (release build: no mods are loaded; the mod folders are kept as they are)
+        if (Features.EXTRAS) for (String n : modOrder()) if (modEnabled(n)) sb.append(n).append('\n');
+        write(new File(modsDir(), "enabled.txt"), sb.toString());
+    }
+
+    private void refreshMods() {
+        if (modList == null) return;
+        modList.removeAllViews();
+        final List<String> order = modOrder();
+        for (int i = 0; i < order.size(); ++i) {
+            final String name = order.get(i);
+            final int index = i;
+            LinearLayout r = row();
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            CheckBox c = checkbox(name + "  (" + countFiles(new File(modsDir(), name)) + " files)", modEnabled(name), on -> {
+                prefs.edit().putBoolean("mod_off_" + name, !on).apply();
+                saveModOrder(order);
+            });
+            r.addView(c, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            if (index > 0) {
+                Button up = button("▲", v -> {
+                    order.remove(index);
+                    order.add(index - 1, name);
+                    saveModOrder(order);
+                    refreshMods();
+                });
+                r.addView(up);
+            }
+            Button remove = button("Remove", v -> confirm("Remove the mod \"" + name + "\"?", () -> {
+                deleteTree(new File(modsDir(), name));
+                prefs.edit().remove("mod_off_" + name).apply();
+                order.remove(name);
+                saveModOrder(order);
+                refreshMods();
+            }));
+            remove.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            r.addView(remove);
+            modList.addView(r);
+        }
+    }
+
+    private static int countFiles(File dir) {
+        File[] list = dir.listFiles();
+        if (list == null) return 0;
+        int n = 0;
+        for (File f : list) n += f.isDirectory() ? countFiles(f) : 1;
+        return n;
+    }
+
+    private static void deleteTree(File f) {
+        File[] list = f.listFiles();
+        if (list != null) for (File c : list) deleteTree(c);
+        f.delete();
+    }
+
+    /** Lower-case names of the game's top-level files and folders, to find where a mod's files start. */
+    private java.util.Set<String> gameTopLevel() {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        String[] list = new File(root, "WWE 13").list();
+        if (list != null) for (String n : list) names.add(n.toLowerCase(Locale.ROOT));
+        return names;
+    }
+
+    private void installMod(Uri uri) {
+        runLong("Installing the mod", () -> {
+            String file = displayName(uri);
+            if (!file.toLowerCase(Locale.ROOT).endsWith(".zip")) {
+                return "Please pick the mod as a .zip file. (RAR and 7z mods need to be repacked as .zip first.)";
+            }
+            String base = file.substring(0, file.length() - 4).replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+            if (base.isEmpty()) base = "mod";
+            File dest = new File(modsDir(), base);
+            for (int i = 2; dest.exists(); ++i) dest = new File(modsDir(), base + " " + i);
+            java.util.Set<String> top = gameTopLevel();
+            int installed = 0;
+            List<String> skipped = new ArrayList<>();
+            try (ZipInputStream zin = new ZipInputStream(getContentResolver().openInputStream(uri))) {
+                ZipEntry e;
+                while ((e = zin.getNextEntry()) != null) {
+                    if (e.isDirectory()) continue;
+                    String[] parts = e.getName().replace('\\', '/').split("/");
+                    int start = -1;
+                    for (int i = 0; i < parts.length; ++i) {
+                        if (top.contains(parts[i].toLowerCase(Locale.ROOT))) { start = i; break; }
+                    }
+                    String rel;
+                    String leaf = parts[parts.length - 1];
+                    String lower = leaf.toLowerCase(Locale.ROOT);
+                    if (start >= 0) {
+                        StringBuilder sb = new StringBuilder();
+                        for (int i = start; i < parts.length; ++i) {
+                            if (parts[i].equals("..") || parts[i].isEmpty()) { sb.setLength(0); break; }
+                            if (sb.length() > 0) sb.append('/');
+                            sb.append(parts[i]);
+                        }
+                        rel = sb.toString();
+                    } else if (lower.endsWith(".pac")) {
+                        rel = "pac/" + leaf;  // loose wrestler/attire files belong in the pac folder
+                    } else {
+                        rel = "";
+                    }
+                    if (rel.isEmpty()) {
+                        if (!lower.endsWith(".txt") && !lower.endsWith(".png") && !lower.endsWith(".jpg")) skipped.add(leaf);
+                        continue;
+                    }
+                    File out = new File(dest, rel);
+                    out.getParentFile().mkdirs();
+                    try (OutputStream os = new FileOutputStream(out)) {
+                        copy(zin, os);
+                    }
+                    ++installed;
+                }
+            }
+            if (installed == 0) {
+                deleteTree(dest);
+                return "No game files were found in this mod." + (skipped.isEmpty() ? "" : "\nIt contains: "
+                        + android.text.TextUtils.join(", ", skipped.subList(0, Math.min(8, skipped.size()))));
+            }
+            List<String> order = modOrder();
+            saveModOrder(order);
+            return "Installed \"" + dest.getName() + "\" (" + installed + " files)."
+                    + (skipped.isEmpty() ? "" : "\nSkipped files the game doesn't use: "
+                    + android.text.TextUtils.join(", ", skipped.subList(0, Math.min(8, skipped.size()))));
+        });
+    }
+
+    private static void write(File f, String s) throws Exception {
+        try (OutputStream out = new FileOutputStream(f)) {
+            out.write(s.getBytes("UTF-8"));
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------ file picking
+
+    private void pick(int request, boolean multiple) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType(request == REQ_SONGS ? "audio/*" : "*/*");
+        if (multiple) i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(i, request);
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (result != RESULT_OK || data == null) return;
+        List<Uri> uris = new ArrayList<>();
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); ++i) uris.add(clip.getItemAt(i).getUri());
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        if (uris.isEmpty()) return;
+        if (request == REQ_SYNC_NEW || request == REQ_SYNC_OPEN) {
+            Uri u = uris.get(0);
+            try {
+                getContentResolver().takePersistableUriPermission(u,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } catch (Exception e) {
+                toastDialog("This location can't be kept for syncing. Try a file in Google Drive or on this device.");
+                return;
+            }
+            prefs.edit().putString("sync_uri", u.toString()).remove("sync_local_fp").remove("sync_remote_sha").apply();
+            runSync(true);
+            return;
+        }
+        switch (request) {
+            case REQ_ISO: installIso(uris.get(0)); break;
+            case REQ_PACKAGE: installPackages(uris); break;
+            case REQ_SONGS: addSongs(uris); break;
+            case REQ_CREATIONS: importCreations(uris); break;
+            case REQ_MOD: installMod(uris.get(0)); break;
+            case REQ_DRIVER: installDriver(uris.get(0)); break;
+            case REQ_K14: portK14(uris.get(0)); break;
+        }
+    }
+
+    private void installIso(Uri uri) {
+        runLong("Installing the game from your disc image", () -> {
+            try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
+                return LauncherNative.extractIso("/proc/self/fd/" + pfd.getFd());
+            }
+        });
+    }
+
+    private void installPackages(List<Uri> uris) {
+        runLong("Installing the title update / DLC", () -> {
+            StringBuilder messages = new StringBuilder();
+            for (Uri uri : uris) {
+                File copy = copyToCache(uri, "packages");
+                String[] info = LauncherNative.inspectPackage(copy.getAbsolutePath()).split("\\|", 2);
+                if (info[0].equals("unknown")) {
+                    messages.append(copy.getName()).append(": not a WWE '13 title update or DLC pack.\n");
+                } else {
+                    String err = LauncherNative.importPackage(copy.getAbsolutePath());
+                    messages.append(info.length > 1 && !info[1].isEmpty() ? info[1] : copy.getName()).append(": ")
+                            .append(err.isEmpty() ? "installed" : err).append('\n');
+                }
+                copy.delete();
+            }
+            return messages.toString().trim();
+        });
+    }
+
+    private void addSongs(List<Uri> uris) {
+        runLong("Adding songs", () -> {
+            File musicDir = new File(root, "music");
+            musicDir.mkdirs();
+            int added = 0;
+            StringBuilder skipped = new StringBuilder();
+            for (Uri uri : uris) {
+                String name = displayName(uri);
+                String lower = name.toLowerCase(Locale.ROOT);
+                if (!(lower.endsWith(".mp3") || lower.endsWith(".flac") || lower.endsWith(".ogg") || lower.endsWith(".wav"))) {
+                    skipped.append(name).append(" (not MP3, FLAC, OGG or WAV)\n");
+                    continue;
+                }
+                File dest = new File(musicDir, name);
+                try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(dest)) {
+                    copy(in, out);
+                    ++added;
+                }
+            }
+            return added + " song(s) added." + (skipped.length() > 0 ? "\nSkipped:\n" + skipped : "");
+        });
+    }
+
+    private void importCreations(List<Uri> uris) {
+        runLong("Importing creations", () -> {
+            List<String> paths = new ArrayList<>();
+            List<File> copies = new ArrayList<>();
+            for (Uri uri : uris) {
+                File copy = copyToCache(uri, "creations");
+                copies.add(copy);
+                paths.add(copy.getAbsolutePath());
+            }
+            String pack = copies.isEmpty() ? "" : copies.get(0).getName();
+            String err = LauncherNative.importCreations(paths.toArray(new String[0]), pack, false);
+            for (File c : copies) c.delete();
+            return err.isEmpty() ? copies.size() + " creation(s) installed." : err;
+        });
+    }
+
+    private File copyToCache(Uri uri, String sub) throws Exception {
+        File dir = new File(getCacheDir(), sub);
+        dir.mkdirs();
+        File dest = new File(dir, displayName(uri));
+        try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(dest)) {
+            copy(in, out);
+        }
+        return dest;
+    }
+
+    private String displayName(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                String n = c.getString(0);
+                if (n != null && !n.isEmpty()) return n.replace('/', '_');
+            }
+        } catch (Exception ignored) {
+        }
+        return "file_" + System.currentTimeMillis();
+    }
+
+    // ------------------------------------------------------------------------------------------ long operations
+
+    interface Job {
+        String run() throws Exception;
+    }
+
+    private void runLong(String title, Job job) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(16), dp(24), dp(8));
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        TextView label = text("Starting…", 14, TEXT);
+        box.addView(bar);
+        box.addView(label);
+        AlertDialog dialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(title).setView(box).setCancelable(false)
+                .setNegativeButton("Cancel", (d, w) -> LauncherNative.cancel()).create();
+        dialog.show();
+        Runnable poll = new Runnable() {
+            @Override
+            public void run() {
+                String[] p = LauncherNative.progress().split("\\|", 3);
+                try {
+                    long done = Long.parseLong(p[0]), total = Long.parseLong(p[1]);
+                    if (total > 0) bar.setProgress((int) (done * 1000 / total));
+                    bar.setIndeterminate(total <= 0);
+                } catch (Exception ignored) {
+                }
+                if (p.length > 2 && !p[2].isEmpty()) label.setText(p[2]);
+                if (dialog.isShowing()) handler.postDelayed(this, 200);
+            }
+        };
+        handler.post(poll);
+        new Thread(() -> {
+            String message;
+            try {
+                message = job.run();
+            } catch (Exception e) {
+                message = "Something went wrong: " + e.getMessage();
+            }
+            final String m = message;
+            handler.post(() -> {
+                dialog.dismiss();
+                toastDialog(m == null || m.isEmpty() ? "Done." : m);
+                refresh();
+            });
+        }).start();
+    }
+
+    // ------------------------------------------------------------------------------------------ small widgets
+
+    interface IntListener {
+        void on(int value);
+    }
+
+    interface BoolListener {
+        void on(boolean value);
+    }
+
+    // The newest crash log (crash_logs/crash-*.txt, written by the game when it dies) not yet dismissed: why it
+    // ended, and a button to save it to Downloads (to send it on).
+    private void addCrashNotice(LinearLayout page) {
+        File[] logs = new File(root, "crash_logs").listFiles((d, n) -> n.startsWith("crash-") && n.endsWith(".txt"));
+        if (logs == null || logs.length == 0) return;
+        File newest = logs[0];
+        for (File f : logs) if (f.getName().compareTo(newest.getName()) > 0) newest = f;
+        if (newest.getName().equals(prefs.getString("crash_seen", ""))) return;
+        String reason = "", fatal = "";
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(newest))) {
+            String l;
+            while ((l = r.readLine()) != null) {
+                if (l.startsWith("Reason: ")) reason = l.substring(8);
+                int k = l.indexOf("[FATAL]");
+                if (k >= 0) fatal = l.substring(k);
+            }
+        } catch (Exception ignored) {
+        }
+        final File log = newest;
+        LinearLayout box = section(page, "The game crashed last time");
+        String when = log.getName().substring(6, log.getName().length() - 4);
+        box.addView(text(when + ": " + reason + (fatal.isEmpty() ? "" : "\n" + fatal)
+                + "\n\nThe crash log is in Android/data/com.toni.wwe13/files/crash_logs/" + log.getName(), 14, TEXT));
+        LinearLayout buttons = row();
+        buttons.addView(button("Save crash log to Downloads", v -> {
+            try {
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "WWE13-" + log.getName());
+                cv.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain");
+                android.net.Uri uri = getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                try (java.io.OutputStream o = getContentResolver().openOutputStream(uri);
+                     java.io.InputStream i = new java.io.FileInputStream(log)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = i.read(buf)) > 0) o.write(buf, 0, n);
+                }
+                toastDialog("Saved to Downloads as WWE13-" + log.getName());
+            } catch (Exception e) {
+                toastDialog("Couldn't save it: " + e.getMessage());
+            }
+        }));
+        buttons.addView(button("Dismiss", v -> {
+            prefs.edit().putString("crash_seen", log.getName()).apply();
+            box.setVisibility(View.GONE);
+        }));
+        box.addView(buttons);
+    }
+
+    private LinearLayout section(LinearLayout page, String title) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(14), dp(18), dp(14));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(CARD);
+        bg.setCornerRadius(dp(12));
+        card.setBackground(bg);
+        TextView t = text(title, 19, TEXT);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(t, wrap(0));
+        page.addView(card, matchWidth(dp(16)));
+        return card;
+    }
+
+    private TextView text(String s, int sp, int color) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextColor(color);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setPadding(0, dp(4), 0, dp(4));
+        return t;
+    }
+
+    private Button button(String label, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextColor(TEXT);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        b.setPadding(dp(18), dp(10), dp(18), dp(10));
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_focused}, rounded(ACCENT));
+        states.addState(new int[]{android.R.attr.state_pressed}, rounded(ACCENT));
+        states.addState(new int[]{}, rounded(0xFF2C2C36));
+        b.setBackground(states);
+        b.setOnClickListener(l);
+        b.setFocusable(true);
+        return b;
+    }
+
+    private GradientDrawable rounded(int color) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(dp(10));
+        return d;
+    }
+
+    private CheckBox checkbox(String label, boolean checked, BoolListener l) {
+        CheckBox c = new CheckBox(this);
+        c.setText(label);
+        c.setTextColor(TEXT);
+        c.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        c.setChecked(checked);
+        c.setOnCheckedChangeListener((v, isChecked) -> l.on(isChecked));
+        return c;
+    }
+
+    private LinearLayout spinnerRow(String label, String[] options, int selected, IntListener l) {
+        LinearLayout r = row();
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        TextView t = text(label, 15, TEXT);
+        r.addView(t, new LinearLayout.LayoutParams(dp(180), ViewGroup.LayoutParams.WRAP_CONTENT));
+        Spinner s = new Spinner(this, Spinner.MODE_DIALOG);
+        ArrayAdapter<String> a = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, options) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                View v = super.getView(position, convertView, parent);
+                ((TextView) v).setTextColor(TEXT);
+                return v;
+            }
+        };
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(a);
+        s.setSelection(Math.max(0, Math.min(selected, options.length - 1)));
+        s.setBackground(rounded(0xFF2C2C36));
+        s.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(android.widget.AdapterView<?> p, View v, int pos, long id) {
+                l.on(pos);
+            }
+
+            @Override
+            public void onNothingSelected(android.widget.AdapterView<?> p) {}
+        });
+        r.addView(s, new LinearLayout.LayoutParams(dp(320), ViewGroup.LayoutParams.WRAP_CONTENT));
+        return r;
+    }
+
+    private View listItem(String label, String action, Runnable onAction) {
+        LinearLayout r = row();
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        TextView t = text(label, 14, TEXT);
+        r.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button b = button(action, v -> onAction.run());
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        r.addView(b);
+        return r;
+    }
+
+    private LinearLayout row() {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setPadding(0, dp(6), 0, dp(6));
+        return r;
+    }
+
+    private LinearLayout.LayoutParams matchWidth(int top) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = top;
+        return p;
+    }
+
+    private LinearLayout.LayoutParams wrap(int top) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = top;
+        return p;
+    }
+
+    private void toastDialog(String message) {
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setMessage(message).setPositiveButton("OK", null).show();
+    }
+
+    private void confirm(String message, Runnable yes) {
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setMessage(message).setPositiveButton("Yes", (d, w) -> yes.run()).setNegativeButton("No", null).show();
+    }
+
+    private static List<String> lines(String s) {
+        List<String> out = new ArrayList<>();
+        for (String l : s.split("\n")) if (!l.trim().isEmpty()) out.add(l);
+        return out;
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+}

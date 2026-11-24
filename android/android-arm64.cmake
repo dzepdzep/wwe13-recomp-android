@@ -1,0 +1,17 @@
+# Android arm64: host clang 18 + NDK r27 sysroot copied from the user's SDK (dl.google.com is blocked here).
+# Set ANDROID_NDK (NDK r27) and ANDROID_NDK_HOST (e.g. linux-x86_64) in the environment.
+set(CMAKE_SYSTEM_NAME Android)
+set(CMAKE_SYSTEM_VERSION 33)
+set(CMAKE_ANDROID_ARCH_ABI arm64-v8a)
+set(CMAKE_ANDROID_NDK $ENV{ANDROID_NDK})
+set(CMAKE_ANDROID_STL_TYPE c++_static)
+set(ANDROID_ABI arm64-v8a)
+set(ANDROID_PLATFORM 33)
+set(_rd "$ENV{ANDROID_NDK}/toolchains/llvm/prebuilt/$ENV{ANDROID_NDK_HOST}/lib/clang/18")
+set(CMAKE_C_FLAGS_INIT "-resource-dir=${_rd} -march=armv8.2-a+fp16+dotprod -ffunction-sections -fdata-sections")
+set(CMAKE_CXX_FLAGS_INIT "-resource-dir=${_rd} -include ${CMAKE_CURRENT_LIST_DIR}/libcxx_compat.h -fexperimental-library -march=armv8.2-a+fp16+dotprod -ffunction-sections -fdata-sections")
+set(CMAKE_ASM_FLAGS_INIT "-resource-dir=${_rd}")
+set(_ld "-resource-dir=${_rd} -fuse-ld=lld --rtlib=compiler-rt --unwindlib=libunwind -Wl,--gc-sections -Wl,-z,max-page-size=16384")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "${_ld}")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "${_ld}")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "${_ld}")

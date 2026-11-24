@@ -1,0 +1,17 @@
+[project]
+name = "wwe13"
+sdk_version = "0.10.0"
+game_root = "game"
+
+[entrypoint]
+file_path = "game/default.xex"
+out_directory_path = "generated/default"
+# The CRT's setjmp / longjmp (jmp_buf in r3), see wwe13_config.toml of the PC release.
+setjmp_address = 0x83193DB0
+longjmp_address = 0x83193A90
+# Guest condition/count/fixed-point/reservation registers as host locals (as 2K14 and Unleashed): faster guest code.
+cr_as_local = true
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+includes = ["config/functions.toml", "config/hooks.toml", "config/switch_tables.toml"]

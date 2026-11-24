@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="settings" android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/settings_short"
+        android:shortcutLongLabel="@string/settings_name">
+        <intent android:action="android.intent.action.VIEW"
+            android:targetPackage="com.toni.wwe13"
+            android:targetClass="com.toni.wwe13.SettingsAlias" />
+    </shortcut>
+</shortcuts>
