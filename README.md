@@ -14,6 +14,10 @@ a Snapdragon 8 Gen 2 handheld (AYN Odin 2 Portal).
   Creations → Entrance → Finalize → Music → User Playlist.
 - Title update 2.0.1.0 and the DLC packs (if you own them).
 - Controllers (Bluetooth or built-in handheld controls).
+- **PlayStation button icons** (launcher setting): ✕ ○ □ △, L1/R1, L2/R2… instead of the Xbox icons. Our own artwork,
+  swapped in as the game loads; no game files are changed.
+- **Updates inside the launcher:** it checks this page for a new release and installs it for you (Android asks you
+  to allow installs from the app the first time).
 - **Touch controls** made for WWE '13: GRAPPLE, STRIKE, WHIP / PIN, FINISHER, REVERSAL, RUN (tap to switch on or off),
   CLIMB / TAG, LIMB / ITEM, a taunt d-pad and a small right stick. They hide while a controller is connected (launcher
   settings: Automatic / Always on / Off, button size, opacity, vibration, Edit touch layout). HIDE / SHOW in the

@@ -195,7 +195,12 @@ public class LauncherActivity extends Activity {
         TextView title = text("WWE '13", 30, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         page.addView(title);
-        page.addView(text("Android port of the WWE '13 recomp", 14, DIM));
+        page.addView(text("Android port of the WWE '13 recomp · version " + Updater.currentVersion(this), 14, DIM));
+        // Update banner (filled in when GitHub has a newer release).
+        updateBox = new LinearLayout(this);
+        updateBox.setOrientation(LinearLayout.VERTICAL);
+        page.addView(updateBox);
+        if (prefs.getBoolean("check_updates", true)) Updater.check(this, true, this::showUpdate);
 
         // Play
         playButton = button("▶  Play", v -> startGame());
@@ -246,6 +251,8 @@ public class LauncherActivity extends Activity {
         if (Features.EXTRAS)
             settings.addView(checkbox("Training mode: the CPU never reverses (plays on a copy of your save, your real save is not changed)",
                     prefs.getBoolean("training", false), c -> prefs.edit().putBoolean("training", c).apply()));
+        settings.addView(spinnerRow("Button icons in the game", new String[] {"Xbox (A B X Y)", "PlayStation (✕ ○ □ △)"},
+                prefs.getInt("button_icons", 0), i -> prefs.edit().putInt("button_icons", i).apply()));
         settings.addView(spinnerRow("Touch controls", new String[] {"Automatic (hidden while a controller is connected)", "Always on", "Off"},
                 prefs.getInt("touch_mode", 0), i -> prefs.edit().putInt("touch_mode", i).apply()));
         settings.addView(spinnerRow("Touch controls opacity", new String[] {"Light (30%)", "Medium (50%)", "Strong (75%)"},
@@ -304,6 +311,12 @@ public class LauncherActivity extends Activity {
             gameMods.addView(modList);
 
         }
+
+        // Updates
+        LinearLayout upd = section(page, "Updates");
+        upd.addView(checkbox("Check for updates when the launcher opens", prefs.getBoolean("check_updates", true),
+                c -> prefs.edit().putBoolean("check_updates", c).apply()));
+        upd.addView(button("Check for updates now", v -> Updater.check(this, false, this::showUpdate)), wrap(dp(4)));
 
         // Saves
         LinearLayout saves = section(page, "Saves");
@@ -458,6 +471,7 @@ public class LauncherActivity extends Activity {
             env.append("WWE13_LOCK_30=").append(fps == 2 ? "1" : "").append('\n');
             env.append("WWE13_UNLOCK_ALL=").append(prefs.getBoolean("unlock_all", false) ? "1" : "").append('\n');
             env.append("WWE13_TRAINING=").append(Features.EXTRAS && prefs.getBoolean("training", false) ? "1" : "").append('\n');
+            env.append("WWE13_PS_PROMPTS=").append(prefs.getInt("button_icons", 0) == 1 ? "1" : "").append('\n');
             env.append("WWE13_SHOW_FPS=").append(prefs.getBoolean("show_fps", false) ? "1" : "").append('\n');
             write(new File(root, "env.txt"), env.toString());
 
@@ -1097,6 +1111,25 @@ public class LauncherActivity extends Activity {
         card.addView(t, wrap(0));
         page.addView(card, matchWidth(dp(16)));
         return card;
+    }
+
+    private LinearLayout updateBox;
+
+    private void showUpdate(Updater.Release r) {
+        if (updateBox == null) return;
+        updateBox.removeAllViews();
+        LinearLayout box = section(updateBox, "Update available: " + r.tag);
+        String notes = r.notes.length() > 600 ? r.notes.substring(0, 600) + "…" : r.notes;
+        box.addView(text(notes.replace("**", "").replace("## ", ""), 13, DIM));
+        box.addView(button("Download and install " + r.tag + " (" + (r.apkSize >> 20) + " MB)",
+                v -> Updater.downloadAndInstall(this, r)), wrap(dp(6)));
+        box.addView(text("Your game files, saves and settings stay.", 13, DIM));
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        Updater.handleStatus(this, intent);
     }
 
     private TextView text(String s, int sp, int color) {
