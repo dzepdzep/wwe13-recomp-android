@@ -565,7 +565,15 @@ void ShadowChainFrameEnd(uint64_t frame) {
   }
 }
 
+REXCVAR_DEFINE_INT32(gpu_submit_safe_point_ms, 0, "GPU",
+                     "Hand the recorded work to the GPU between two commands once it has been building up this many ms "
+                     "(0 = only when the command thread runs out of commands)")
+    .range(0, 100)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 namespace rex::graphics {
+bool CpSafePointDue();
+
 
 using namespace rex::graphics::xenos;
 
@@ -1033,6 +1041,10 @@ void CommandProcessor::WorkerThreadMain() {
   auto& command_beat = rex::perf::hang_beats::Get().command;
   while (worker_running_) {
     rex::perf::hang_beats::Beat(command_beat);
+    // WWE '13 Android port (entrance slowdowns, gpu_submit_safe_point_ms): see CpSafePointDue.
+    if (CpSafePointDue()) {
+      PrepareForWait();
+    }
     while (PendingFnsWaiting()) {
       std::function<void()> fn;
       {
@@ -1795,6 +1807,26 @@ void CommandProcessor::MakeCoherent() {
   regs_volatile[XE_GPU_REG_COHER_STATUS_HOST] = 0;
 }
 
+// WWE '13 Android port (entrance slowdowns): when this thread runs behind the game it never runs out of commands, so the
+// idle-time submission (PrepareForWait -> vulkan_submit_on_wait) never happens and a whole heavy frame reaches the GPU
+// only with its swap - the GPU then finishes ~10 ms after the swap, the flip misses its vblank and the game drops to
+// 30 fps until the load eases. The top of this loop, between two commands, is the same point where the idle-time
+// submission happens; with gpu_submit_safe_point_ms > 0 it also happens there once the work has been building up that
+// long since the last submission (CpNoteSubmissionEnded, called by the backend).
+
+static std::atomic<int64_t> g_cp_last_submission_us{0};
+static int64_t CpNowUs() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+void CpNoteSubmissionEnded() { g_cp_last_submission_us.store(CpNowUs(), std::memory_order_relaxed); }
+bool CpSafePointDue() {
+  const int32_t ms = REXCVAR_GET(gpu_submit_safe_point_ms);
+  if (ms <= 0) return false;
+  const int64_t now = CpNowUs();
+  if (now - g_cp_last_submission_us.load(std::memory_order_relaxed) < int64_t(ms) * 1000) return false;
+  g_cp_last_submission_us.store(now, std::memory_order_relaxed);  // (also when nothing was open: check again in ms)
+  return true;
+}
 void CommandProcessor::PrepareForWait() {}
 
 void CommandProcessor::ReturnFromWait() {}

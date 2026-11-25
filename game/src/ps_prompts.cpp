@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -126,7 +127,36 @@ void ApplyPatches(uint8_t* px, uint32_t sheet, uint32_t width) {
   }
 }
 
+// WWE13_DDS_DUMP=<dir> (finding textures to replace): every DXT texture (64..1024 wide) unpacked from a pac is written
+// there once, named <w>x<h>_<fourcc>_<hash>.dds.
+void DumpTextures(const uint8_t* out, uint32_t size) {
+  static const char* dir = std::getenv("WWE13_DDS_DUMP");
+  if (!dir || !*dir) return;
+  static const uint8_t kMagic[] = {'D', 'D', 'S', ' ', 0x7c, 0, 0, 0};
+  for (uint32_t i = 0; i + 128 <= size;) {
+    const void* hit = memmem(out + i, size - i, kMagic, sizeof(kMagic));
+    if (!hit) break;
+    const uint32_t at = uint32_t(static_cast<const uint8_t*>(hit) - out);
+    i = at + 4;
+    const uint8_t* d = out + at;
+    const uint32_t h = Le32(d + 12), w = Le32(d + 16);
+    const bool dxt1 = std::memcmp(d + 84, "DXT1", 4) == 0;
+    if (!dxt1 && std::memcmp(d + 84, "DXT5", 4) != 0 && std::memcmp(d + 84, "DXT3", 4) != 0) continue;
+    if (w < 64 || h < 32 || w > 1024 || h > 1024) continue;
+    const uint32_t bytes = dxt1 ? w * h / 2 : w * h;
+    if (at + 128 + bytes > size) continue;
+    const uint64_t hash = Fnv(d + 128, bytes);
+    char path[512];
+    std::snprintf(path, sizeof(path), "%s/%ux%u_%.4s_%016llx.dds", dir, w, h, reinterpret_cast<const char*>(d + 84),
+                  static_cast<unsigned long long>(hash));
+    if (FILE* f = std::fopen(path, "rb")) { std::fclose(f); continue; }
+    if (FILE* f = std::fopen(path, "wb")) { std::fwrite(d, 1, 128 + bytes, f); std::fclose(f); }
+  }
+}
+
 void PatchSheets(uint8_t* out, uint32_t size, uint32_t guest) {
+  DumpTextures(out, size);
+  if (!Enabled()) return;
   static const uint8_t kMagic[] = {'D', 'D', 'S', ' ', 0x7c, 0, 0, 0};
   for (uint32_t i = 0; i + 128 <= size;) {
     const void* hit = memmem(out + i, size - i, kMagic, sizeof(kMagic));
@@ -153,11 +183,11 @@ extern "C" PPC_FUNC(__imp__sub_82B29CA0);
 extern "C" PPC_FUNC(sub_82B29CA0) {
   const uint32_t header = ctx.r3.u32, dest = ctx.r4.u32;
   __imp__sub_82B29CA0(ctx, base);
-  if (!Enabled() || !header || !dest) return;
+  if ((!Enabled() && !std::getenv("WWE13_DDS_DUMP")) || !header || !dest) return;
   const uint8_t* h = base + header;
   if (std::memcmp(h, "BPE ", 4) != 0) return;
   const uint32_t size = Le32(h + 12);
-  if (size < 128 + 256 * 512 || size > (64u << 20)) return;
+  if (size < 128 + 64 * 32 || size > (64u << 20)) return;
   PatchSheets(base + dest, size, dest);
 }
 
@@ -166,10 +196,10 @@ extern "C" PPC_FUNC(__imp__sub_82B38500);
 extern "C" PPC_FUNC(sub_82B38500) {
   const uint32_t dest = ctx.r3.u32, header = ctx.r5.u32;
   __imp__sub_82B38500(ctx, base);
-  if (!Enabled() || !header || !dest) return;
+  if ((!Enabled() && !std::getenv("WWE13_DDS_DUMP")) || !header || !dest) return;
   const uint8_t* h = base + header;
   const uint32_t size = Le32(h + 12);
-  if (size < 128 + 256 * 512 || size > (64u << 20)) return;
+  if (size < 128 + 64 * 32 || size > (64u << 20)) return;
   PatchSheets(base + dest, size, dest);
 }
 
@@ -177,6 +207,6 @@ extern "C" PPC_FUNC(sub_82B38500) {
 // the in-match icon sheet (GA2D/BASE part 2) stored, so the pause menu and the match HUD never went through the BPE
 // hook. pac_diag.cpp calls this after every part it extracts.
 void wwe13_ps_prompts_part(uint8_t* base, uint32_t dest, uint32_t size) {
-  if (!Enabled() || !dest || size < 128 + 256 * 512 || size > (64u << 20)) return;
+  if ((!Enabled() && !std::getenv("WWE13_DDS_DUMP")) || !dest || size < 128 + 64 * 32 || size > (64u << 20)) return;
   PatchSheets(base + dest, size, dest);
 }

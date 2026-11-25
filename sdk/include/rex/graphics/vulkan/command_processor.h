@@ -860,6 +860,7 @@ class VulkanCommandProcessor : public CommandProcessor {
   // clearing and stopping capturing. Returns whether the submission was done
   // successfully, if it has failed, leaves it open.
   bool EndSubmission(bool is_swap);
+  uint32_t copies_in_submission_ = 0;  // WWE '13 port: vulkan_submit_after_copies
   bool AwaitAllQueueOperationsCompletion() {
     // wwe2k14 patch (Session 66, H1.1): any other wait first copies the pending resolve readbacks back (in order).
     if (!readback_pending_.empty()) {

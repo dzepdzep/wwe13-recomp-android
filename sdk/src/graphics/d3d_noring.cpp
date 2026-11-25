@@ -1051,6 +1051,7 @@ void CommandProcessor::D3dNoringGateRelease(int how, bool publish) {
 }
 
 // Pops and runs everything queued. True if anything ran.
+bool CpSafePointDue();  // command_processor.cpp (WWE '13 port)
 bool CommandProcessor::D3dNoringDrain() {
   D3dNoringShared* s = Shared();
   if (!s) return false;
@@ -1105,6 +1106,9 @@ bool CommandProcessor::D3dNoringDrain() {
       break;
     }
     if (kind != kNrPad) {
+      // WWE '13 port (gpu_submit_safe_point_ms): between two items is where the queue runs dry when this thread keeps
+      // up, and where the recorded work then goes to the GPU (PrepareForWait); do the same here once it has built up.
+      if (CpSafePointDue()) PrepareForWait();
       if (g_gate.open.load(std::memory_order_relaxed)) D3dNoringGatePoll();  // (M5c) one load of the flip word between items
       const bool gate_was_open = g_gate.open.load(std::memory_order_relaxed);  // (G2) the item that opens the gate is not counted
       s->items[kind < kNrKindCount ? kind : 0].fetch_add(1, std::memory_order_relaxed);

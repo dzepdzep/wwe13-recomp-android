@@ -64,10 +64,11 @@ public class LauncherActivity extends Activity {
     private static final String[] LANG_LABELS = {"English", "German", "French", "Spanish", "Italian"};
     private static final int[] LANG_IDS = {1, 3, 4, 5, 6};
 
-    private static final int BG = 0xFF101014;
-    private static final int CARD = 0xFF1B1B22;
-    private static final int ACCENT = 0xFFD7262E;
-    private static final int TEXT = 0xFFEDEDED;
+    // WWE '13 look: black, the game's red, white bold capitals.
+    private static final int BG = 0xFF070707;
+    private static final int CARD = 0xE6141414;
+    private static final int ACCENT = 0xFFD7191F;
+    private static final int TEXT = 0xFFF2F2F2;
     private static final int DIM = 0xFF9A9AA6;
 
     private SharedPreferences prefs;
@@ -117,9 +118,10 @@ public class LauncherActivity extends Activity {
     private final Runnable startRunnable = () -> { if (startPending) { startPending = false; startGame(); } };
 
     private void startSoon() {
-        TextView t = text("Starting WWE '13…\n\nPress any button or tap for settings", 18, TEXT);
+        TextView t = text("WWE'13\n\nPRESS ANY BUTTON OR TAP FOR SETTINGS", 18, TEXT);
         t.setGravity(Gravity.CENTER);
-        t.setBackgroundColor(BG);
+        t.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD_ITALIC));
+        t.setBackground(new XBackground());
         t.setOnClickListener(v -> openSettingsInstead());
         setContentView(t);
         startPending = true;
@@ -185,30 +187,66 @@ public class LauncherActivity extends Activity {
     // ------------------------------------------------------------------------------------------ UI
 
     private void buildUi() {
+        tabs.clear();
+        tabButtons.clear();
+        // Two panes like the game's menus: the menu on the left, the chosen page on the right, over a red X.
+        LinearLayout rootView = new LinearLayout(this);
+        rootView.setOrientation(LinearLayout.HORIZONTAL);
+        rootView.setBackground(new XBackground());
+
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.VERTICAL);
+        nav.setPadding(dp(28), dp(22), dp(12), dp(16));
+        TextView logo = text("WWE'13", 44, TEXT);
+        logo.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD_ITALIC));
+        logo.setShadowLayer(dp(6), 0, 0, ACCENT);
+        nav.addView(logo);
+        View bar = new View(this);
+        bar.setBackgroundColor(ACCENT);
+        nav.addView(bar, new LinearLayout.LayoutParams(dp(170), dp(4)));
+        TextView ver = text("ANDROID PORT  ·  v" + Updater.currentVersion(this), 11, DIM);
+        ver.setLetterSpacing(0.08f);
+        nav.addView(ver);
+        navItems = new LinearLayout(this);
+        navItems.setOrientation(LinearLayout.VERTICAL);
+        navItems.setPadding(0, dp(14), 0, 0);
+        nav.addView(navItems);
+        ScrollView navScroll = new ScrollView(this);
+        navScroll.addView(nav);
+        rootView.addView(navScroll, new LinearLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.MATCH_PARENT));
+
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(BG);
+        contentScroll = scroll;
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(28), dp(20), dp(28), dp(28));
+        page.setPadding(dp(12), dp(22), dp(28), dp(28));
         scroll.addView(page);
+        rootView.addView(scroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        TextView title = text("WWE '13", 30, TEXT);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        page.addView(title);
-        page.addView(text("Android port of the WWE '13 recomp · version " + Updater.currentVersion(this), 14, DIM));
+        // ---- PLAY
+        currentTab = "PLAY";
         // Update banner (filled in when GitHub has a newer release).
         updateBox = new LinearLayout(this);
         updateBox.setOrientation(LinearLayout.VERTICAL);
         page.addView(updateBox);
+        tag(updateBox);
         if (prefs.getBoolean("check_updates", true)) Updater.check(this, true, this::showUpdate);
 
-        // Play
-        playButton = button("▶  Play", v -> startGame());
-        playButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        page.addView(playButton, matchWidth(dp(14)));
-        CheckBox skip = checkbox("Skip this screen and start the game directly (press any button while it starts to come back here)",
+        playButton = button("PLAY", v -> startGame());
+        playButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
+        playButton.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD_ITALIC));
+        playButton.setPadding(dp(24), dp(18), dp(24), dp(18));
+        StateListDrawable playBg = new StateListDrawable();
+        playBg.addState(new int[]{android.R.attr.state_focused}, rounded(0xFFF0262C));
+        playBg.addState(new int[]{android.R.attr.state_pressed}, rounded(0xFF9E1015));
+        playBg.addState(new int[]{}, rounded(ACCENT));
+        playButton.setBackground(playBg);
+        page.addView(playButton, matchWidth(dp(6)));
+        tag(playButton);
+        CheckBox skip = checkbox("Start the game directly next time (press any button while it starts to come back here)",
                 prefs.getBoolean("skip_launcher", false), c -> prefs.edit().putBoolean("skip_launcher", c).apply());
         page.addView(skip);
+        tag(skip);
         addCrashNotice(page);
 
         // Game files
@@ -222,8 +260,9 @@ public class LauncherActivity extends Activity {
         files.addView(text("Use your own WWE '13 Xbox 360 disc image and title update 2.0.1.0. The game is copied into the app, "
                 + "so you can delete the image afterwards.", 13, DIM));
 
-        // Settings
-        LinearLayout settings = section(page, "Settings");
+        // ---- GRAPHICS
+        currentTab = "GRAPHICS";
+        LinearLayout settings = section(page, "Graphics");
         settings.addView(spinnerRow("Resolution", RES_LABELS, prefs.getInt("resolution", 2),
                 i -> prefs.edit().putInt("resolution", i).apply()));
         settings.addView(spinnerRow("Frame rate", FPS_LABELS, prefs.getInt("frame_rate", 1),
@@ -235,6 +274,18 @@ public class LauncherActivity extends Activity {
                 Math.max(0, driverIds.indexOf(currentDriver())),
                 i -> prefs.edit().putString("driver_name", driverIds.get(i)).apply()));
         settings.addView(button("Add GPU driver (.zip)…", v -> pick(REQ_DRIVER, false)), wrap(dp(4)));
+        settings.addView(checkbox("Faster anti-aliasing (2x instead of 4x)", prefs.getBoolean("aa_faster", false),
+                c -> prefs.edit().putBoolean("aa_faster", c).apply()));
+        settings.addView(checkbox("Stretch the picture to fill the screen", prefs.getBoolean("stretch", false),
+                c -> prefs.edit().putBoolean("stretch", c).apply()));
+        settings.addView(checkbox("Show an FPS counter in the game", prefs.getBoolean("show_fps", false),
+                c -> prefs.edit().putBoolean("show_fps", c).apply()));
+        settings.addView(text("The first start prepares the game's graphics shaders (about 25 seconds on a black screen) so "
+                + "menus and matches don't stutter. Later starts reuse them and take about a second.", 13, DIM));
+
+        // ---- GAME
+        currentTab = "GAME";
+        settings = section(page, "Game");
         int langIndex = 0;
         int lang = LauncherNative.getLanguage();
         for (int i = 0; i < LANG_IDS.length; ++i) if (LANG_IDS[i] == lang) langIndex = i;
@@ -242,10 +293,6 @@ public class LauncherActivity extends Activity {
             String err = LauncherNative.setLanguage(LANG_IDS[i]);
             if (!err.isEmpty()) toastDialog(err);
         }));
-        settings.addView(checkbox("Faster anti-aliasing (2x instead of 4x)", prefs.getBoolean("aa_faster", false),
-                c -> prefs.edit().putBoolean("aa_faster", c).apply()));
-        settings.addView(checkbox("Stretch the picture to fill the screen", prefs.getBoolean("stretch", false),
-                c -> prefs.edit().putBoolean("stretch", c).apply()));
         settings.addView(checkbox("Unlock all superstars, arenas and attires (your save is not changed)", prefs.getBoolean("unlock_all", false),
                 c -> prefs.edit().putBoolean("unlock_all", c).apply()));
         if (Features.EXTRAS)
@@ -253,6 +300,9 @@ public class LauncherActivity extends Activity {
                     prefs.getBoolean("training", false), c -> prefs.edit().putBoolean("training", c).apply()));
         settings.addView(spinnerRow("Button icons in the game", new String[] {"Xbox (A B X Y)", "PlayStation (✕ ○ □ △)"},
                 prefs.getInt("button_icons", 0), i -> prefs.edit().putInt("button_icons", i).apply()));
+        // ---- CONTROLS
+        currentTab = "CONTROLS";
+        settings = section(page, "Touch controls");
         settings.addView(spinnerRow("Touch controls", new String[] {"Automatic (hidden while a controller is connected)", "Always on", "Off"},
                 prefs.getInt("touch_mode", 0), i -> prefs.edit().putInt("touch_mode", i).apply()));
         settings.addView(spinnerRow("Touch controls opacity", new String[] {"Light (30%)", "Medium (50%)", "Strong (75%)"},
@@ -264,14 +314,9 @@ public class LauncherActivity extends Activity {
                 c -> prefs.edit().putBoolean("touch_vibrate", c).apply()));
         settings.addView(text("Touch controls: tap RUN to switch running on or off (or push the stick past its ring). HIDE / SHOW "
                 + "in the game's top-right corner hides the buttons and brings them back; hold it (or use Edit touch layout) to move and resize them.", 13, DIM));
-        settings.addView(checkbox("Show an FPS counter in the game", prefs.getBoolean("show_fps", false),
-                c -> prefs.edit().putBoolean("show_fps", c).apply()));
-        settings.addView(checkbox("Back up my saves before each start (the newest 20 are kept)", prefs.getBoolean("auto_backup", true),
-                c -> prefs.edit().putBoolean("auto_backup", c).apply()));
-        settings.addView(text("The first start prepares the game's graphics shaders (about 25 seconds on a black screen) so "
-                + "menus and matches don't stutter. Later starts reuse them and take about a second.", 13, DIM));
 
-        // Music
+        // ---- MUSIC
+        currentTab = "MUSIC";
         LinearLayout music = section(page, "Custom music (entrance music)");
         music.addView(text("Songs you add here can be used as entrance music: Creations → Entrance → Finalize → Music → "
                 + "User Playlist. MP3, FLAC, OGG and WAV.", 13, DIM));
@@ -280,6 +325,7 @@ public class LauncherActivity extends Activity {
         songList.setOrientation(LinearLayout.VERTICAL);
         music.addView(songList);
 
+        currentTab = "MODS";
         if (Features.EXTRAS) {
             // Creations (mods)
             LinearLayout mods = section(page, "Creations and mods");
@@ -312,14 +358,18 @@ public class LauncherActivity extends Activity {
 
         }
 
-        // Updates
+        // ---- UPDATES
+        currentTab = "UPDATES";
         LinearLayout upd = section(page, "Updates");
         upd.addView(checkbox("Check for updates when the launcher opens", prefs.getBoolean("check_updates", true),
                 c -> prefs.edit().putBoolean("check_updates", c).apply()));
         upd.addView(button("Check for updates now", v -> Updater.check(this, false, this::showUpdate)), wrap(dp(4)));
 
-        // Saves
+        // ---- SAVES
+        currentTab = "SAVES";
         LinearLayout saves = section(page, "Saves");
+        saves.addView(checkbox("Back up my saves before each start (the newest 20 are kept)", prefs.getBoolean("auto_backup", true),
+                c -> prefs.edit().putBoolean("auto_backup", c).apply()));
         saves.addView(button("Back up my saves now", v -> {
             String err = LauncherNative.backupSaves();
             toastDialog(err.isEmpty() ? "Saves backed up." : err);
@@ -361,9 +411,116 @@ public class LauncherActivity extends Activity {
 
         }
 
-        setContentView(scroll);
+        // The menu on the left: one entry per page that has something on it.
+        for (String name : new String[] {"PLAY", "GRAPHICS", "GAME", "CONTROLS", "MUSIC", "MODS", "SAVES", "UPDATES"}) {
+            if (!tabs.containsKey(name)) continue;
+            final String n = name;
+            Button b = navButton(name, v -> showTab(n));
+            tabButtons.put(name, b);
+            navItems.addView(b, matchWidth(dp(2)));
+        }
+        setContentView(rootView);
         refresh();
+        showTab(prefs.getString("launcher_tab", "PLAY"));
         playButton.requestFocus();
+    }
+
+    // ------------------------------------------------------------------------------------------ pages
+    private final java.util.LinkedHashMap<String, List<View>> tabs = new java.util.LinkedHashMap<>();
+    private final java.util.HashMap<String, Button> tabButtons = new java.util.HashMap<>();
+    private String currentTab = "PLAY", shownTab = "PLAY";
+    private LinearLayout navItems;
+    private ScrollView contentScroll;
+
+    private void tag(View v) {
+        List<View> l = tabs.get(currentTab);
+        if (l == null) tabs.put(currentTab, l = new ArrayList<>());
+        l.add(v);
+    }
+
+    private void showTab(String name) {
+        if (!tabs.containsKey(name)) name = "PLAY";
+        shownTab = name;
+        prefs.edit().putString("launcher_tab", name).apply();
+        for (java.util.Map.Entry<String, List<View>> e : tabs.entrySet())
+            for (View v : e.getValue()) v.setVisibility(e.getKey().equals(name) ? View.VISIBLE : View.GONE);
+        for (java.util.Map.Entry<String, Button> e : tabButtons.entrySet()) e.getValue().setSelected(e.getKey().equals(name));
+        if (contentScroll != null) contentScroll.scrollTo(0, 0);
+    }
+
+    private Button navButton(String label, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(true);
+        b.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        b.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD_ITALIC));
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
+        b.setLetterSpacing(0.04f);
+        b.setPadding(dp(14), dp(6), dp(10), dp(6));
+        b.setMinHeight(0);
+        b.setMinimumHeight(dp(44));
+        int[][] st = {{android.R.attr.state_focused}, {android.R.attr.state_pressed}, {android.R.attr.state_selected}, {}};
+        b.setTextColor(new android.content.res.ColorStateList(st, new int[] {Color.WHITE, Color.WHITE, ACCENT, 0xFFBDBDBD}));
+        StateListDrawable d = new StateListDrawable();
+        d.addState(new int[] {android.R.attr.state_focused}, slant(ACCENT));
+        d.addState(new int[] {android.R.attr.state_pressed}, slant(ACCENT));
+        d.addState(new int[] {}, new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        b.setBackground(d);
+        b.setOnClickListener(l);
+        b.setOnFocusChangeListener((v, f) -> { if (f) showTab(label); });
+        b.setFocusable(true);
+        return b;
+    }
+
+    /** A red bar with a slanted right end, like the highlight in the game's menus. */
+    private android.graphics.drawable.Drawable slant(int color) {
+        return new android.graphics.drawable.Drawable() {
+            final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            @Override public void draw(android.graphics.Canvas c) {
+                android.graphics.Rect r = getBounds();
+                p.setColor(color);
+                android.graphics.Path path = new android.graphics.Path();
+                float k = r.height() * 0.35f;
+                path.moveTo(r.left, r.top);
+                path.lineTo(r.right, r.top);
+                path.lineTo(r.right - k, r.bottom);
+                path.lineTo(r.left, r.bottom);
+                path.close();
+                c.drawPath(path, p);
+            }
+            @Override public void setAlpha(int a) {}
+            @Override public void setColorFilter(android.graphics.ColorFilter f) {}
+            @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+        };
+    }
+
+    /** Black with the game's big red X and a dark vignette. */
+    private final class XBackground extends android.graphics.drawable.Drawable {
+        final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        @Override public void draw(android.graphics.Canvas c) {
+            android.graphics.Rect r = getBounds();
+            c.drawColor(BG);
+            float w = r.width(), h = r.height(), cx = w * 0.62f, cy = h * 0.5f, t = h * 0.16f;
+            p.setStyle(android.graphics.Paint.Style.FILL);
+            p.setShader(new android.graphics.LinearGradient(0, 0, w, h, 0x22C0141A, 0x99C0141A, android.graphics.Shader.TileMode.CLAMP));
+            for (int k = 0; k < 2; ++k) {
+                android.graphics.Path band = new android.graphics.Path();
+                float dx = h * 0.75f * (k == 0 ? 1 : -1);
+                band.moveTo(cx - dx - t, cy - h);
+                band.lineTo(cx - dx + t, cy - h);
+                band.lineTo(cx + dx + t, cy + h);
+                band.lineTo(cx + dx - t, cy + h);
+                band.close();
+                c.drawPath(band, p);
+            }
+            p.setShader(new android.graphics.RadialGradient(cx, cy, Math.max(w, h) * 0.75f, 0x00000000, 0xE6000000,
+                    android.graphics.Shader.TileMode.CLAMP));
+            c.drawRect(r, p);
+            p.setShader(null);
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(android.graphics.ColorFilter f) {}
+        @Override public int getOpacity() { return android.graphics.PixelFormat.OPAQUE; }
     }
 
     private void refresh() {
@@ -1099,17 +1256,24 @@ public class LauncherActivity extends Activity {
     }
 
     private LinearLayout section(LinearLayout page, String title) {
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        // The header: a white bar with black italic capitals and a red line under it, as in the game's pause menu.
+        TextView t = text(title.toUpperCase(Locale.ROOT), 17, 0xFF0A0A0A);
+        t.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD_ITALIC));
+        t.setPadding(dp(16), dp(5), dp(16), dp(5));
+        t.setBackground(slant(0xFFE8E8E8));
+        outer.addView(t, matchWidth(0));
+        View red = new View(this);
+        red.setBackgroundColor(ACCENT);
+        outer.addView(red, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(18), dp(14), dp(18), dp(14));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(CARD);
-        bg.setCornerRadius(dp(12));
-        card.setBackground(bg);
-        TextView t = text(title, 19, TEXT);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        card.addView(t, wrap(0));
-        page.addView(card, matchWidth(dp(16)));
+        card.setPadding(dp(18), dp(10), dp(18), dp(14));
+        card.setBackgroundColor(CARD);
+        outer.addView(card, matchWidth(0));
+        page.addView(outer, matchWidth(dp(14)));
+        if (page != updateBox) tag(outer);
         return card;
     }
 
@@ -1144,14 +1308,15 @@ public class LauncherActivity extends Activity {
     private Button button(String label, View.OnClickListener l) {
         Button b = new Button(this);
         b.setText(label);
-        b.setAllCaps(false);
+        b.setAllCaps(true);
         b.setTextColor(TEXT);
+        b.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         b.setPadding(dp(18), dp(10), dp(18), dp(10));
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_focused}, rounded(ACCENT));
         states.addState(new int[]{android.R.attr.state_pressed}, rounded(ACCENT));
-        states.addState(new int[]{}, rounded(0xFF2C2C36));
+        states.addState(new int[]{}, rounded(0xFF262626));
         b.setBackground(states);
         b.setOnClickListener(l);
         b.setFocusable(true);
@@ -1161,7 +1326,7 @@ public class LauncherActivity extends Activity {
     private GradientDrawable rounded(int color) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(color);
-        d.setCornerRadius(dp(10));
+        d.setCornerRadius(dp(2));
         return d;
     }
 
@@ -1171,6 +1336,7 @@ public class LauncherActivity extends Activity {
         c.setTextColor(TEXT);
         c.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         c.setChecked(checked);
+        c.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
         c.setOnCheckedChangeListener((v, isChecked) -> l.on(isChecked));
         return c;
     }
@@ -1192,7 +1358,7 @@ public class LauncherActivity extends Activity {
         a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         s.setAdapter(a);
         s.setSelection(Math.max(0, Math.min(selected, options.length - 1)));
-        s.setBackground(rounded(0xFF2C2C36));
+        s.setBackground(rounded(0xFF262626));
         s.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(android.widget.AdapterView<?> p, View v, int pos, long id) {
@@ -1220,6 +1386,11 @@ public class LauncherActivity extends Activity {
     private LinearLayout row() {
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setShowDividers(LinearLayout.SHOW_DIVIDER_MIDDLE);
+        GradientDrawable gap = new GradientDrawable();
+        gap.setSize(dp(10), 1);
+        gap.setColor(Color.TRANSPARENT);
+        r.setDividerDrawable(gap);
         r.setPadding(0, dp(6), 0, dp(6));
         return r;
     }

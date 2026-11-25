@@ -238,6 +238,10 @@ REXCVAR_DEFINE_BOOL(gpu_native_own_crowd, false, "GPU/Native",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 // wwe2k14 patch (Session 93, idea 5): the own crowd's CPU cost on TRUE NATIVE.
 namespace rex::graphics {
+void CpNoteSubmissionEnded();  // WWE '13 port: graphics/command_processor.cpp (gpu_submit_safe_point_ms)
+}  // namespace rex::graphics
+
+namespace rex::graphics {
 extern void (*g_own_crowd_frame_hook)(CommandProcessor*);
 }
 static std::atomic<uint32_t> g_own_crowd_program_gen{0};  // bumped when a program is registered (the lean call's pointer cache)
@@ -586,6 +590,14 @@ REXCVAR_DEFINE_BOOL(vulkan_async_submit, false, "GPU/Vulkan",
 REXCVAR_DEFINE_BOOL(vulkan_deferred_descriptor_writes, false, "GPU/Vulkan",
                     "With vulkan_async_submit: per-draw descriptor set writes (vkUpdateDescriptorSets) run on "
                     "the submit thread as part of the replay");
+// WWE '13 Android port (entrance slowdowns): when the command processor runs late it never waits for the guest's
+// vblank, so vulkan_submit_on_wait never fires and the whole frame goes to the GPU only with the swap; the GPU then
+// finishes ~10 ms after the swap and the flip misses its vblank (30 fps until the load drops). Submitting after a
+// number of copies (resolves) lets the GPU start on the frame while it is still being recorded. 0 = off.
+REXCVAR_DEFINE_INT32(vulkan_submit_after_copies, 0, "GPU/Vulkan",
+                     "End the submission after this many copies (resolves) recorded into it, 0 = off")
+    .range(0, 1000)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_BOOL(vulkan_submit_on_wait, false, "GPU/Vulkan",
                     "Submit the recorded commands when the command processor starts waiting (WAIT_REG_MEM, "
                     "out of commands), so the replay overlaps the wait");
@@ -15252,7 +15264,13 @@ bool VulkanCommandProcessor::IssueCopy() {
   w.color_info = regs[XE_GPU_REG_RB_COLOR_INFO];
   w.depth_info = regs[XE_GPU_REG_RB_DEPTH_INFO];
   w.mode_control = regs[XE_GPU_REG_RB_MODECONTROL];
-  return IssueCopyFrom(w, nullptr);
+  const bool ok = IssueCopyFrom(w, nullptr);
+  if (const int32_t every = REXCVAR_GET(vulkan_submit_after_copies); every > 0 && submission_open_) {
+    if (++copies_in_submission_ >= uint32_t(every) && CanEndSubmissionImmediately()) {
+      EndSubmission(false);
+    }
+  }
+  return ok;
 }
 
 void PostLiteNoteCopy(uint32_t dest_base);  // wwe2k14 patch (Session 95, gpu_native_post_lite_near): owned_front_own.cpp
@@ -17065,6 +17083,8 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
 }
 
 bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
+  copies_in_submission_ = 0;
+  if (submission_open_) ::rex::graphics::CpNoteSubmissionEnded();  // WWE '13 port: gpu_submit_safe_point_ms (graphics/command_processor.cpp)
   perf::timeline::Scope timeline_scope("endsub_b", "endsub_e", is_swap, uint32_t(GetCurrentSubmission()));
   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();

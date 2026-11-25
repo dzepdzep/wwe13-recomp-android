@@ -177,7 +177,71 @@ def stick_center(w, h, text):
 SHEETS = [  # (width, height, FNV-1a 64 of the original pixel bytes)
     (256, 512, 0xf8416f9573d0bc05),
     (512, 512, 0xe31732e85301a980),
+    (128, 64, 0xda6a4f053e0b2ea7),  # the controller picture of the superstar select screen (white Xbox 360 pad)
+    (128, 64, 0xb9562e7041145719),  # the same screen's dark controller outline (CPU slot, bottom)
 ]
+
+
+def controller_outline(w=128, h=64):
+    """The dark version: our controller with its colours inverted to the game's style (black body, light rim and parts)."""
+    from PIL import ImageFilter
+    big = controller(w * 4, h * 4)
+    a = big.getchannel("A")
+    rgb = np.array(big.convert("RGB"), int)
+    lum = rgb.mean(axis=2)
+    # white body -> near black; grey rim / touch pad and dark parts -> light grey
+    out = np.where(lum[..., None] > 225, 20, np.where(lum[..., None] > 170, 150, 200)).repeat(3, axis=2)
+    inner = np.array(a.filter(ImageFilter.MinFilter(9)), int)
+    rim = np.clip(np.array(a, int) - inner, 0, 255)[..., None] / 255.0
+    out = (out * (1 - rim) + 230 * rim).astype(np.uint8)
+    im = Image.fromarray(out).convert("RGBA")
+    im.putalpha(a)
+    return im.resize((w, h), Image.LANCZOS)
+
+
+def controller(w=128, h=64):
+    """A white PlayStation-style controller (two sticks side by side below a touch pad; d-pad and the four symbols)."""
+    S = 8
+    W, H = w * S, h * S
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    body, edge, dark = (238, 238, 240, 255), (150, 150, 158, 255), (34, 34, 38, 255)
+    # grips and body
+    for gx, k in ((0.255, -1), (0.745, 1)):
+        g = [(W * (gx - 0.07 * k), H * 0.30), (W * (gx + 0.06 * k), H * 0.30), (W * (gx + 0.085 * k), H * 0.86),
+             (W * (gx - 0.035 * k), H * 0.86)]
+        d.polygon(g, fill=edge)
+        d.ellipse([W * (gx + 0.025 * k) - W * 0.062, H * 0.70, W * (gx + 0.025 * k) + W * 0.062, H * 0.97], fill=edge)
+        d.ellipse([W * (gx + 0.025 * k) - W * 0.055, H * 0.70, W * (gx + 0.025 * k) + W * 0.055, H * 0.94], fill=body)
+        g2 = [(W * (gx - 0.065 * k), H * 0.30), (W * (gx + 0.055 * k), H * 0.30), (W * (gx + 0.078 * k), H * 0.84),
+              (W * (gx - 0.028 * k), H * 0.84)]
+        d.polygon(g2, fill=body)
+    d.rounded_rectangle([W * 0.18, H * 0.10, W * 0.82, H * 0.66], radius=H * 0.20, fill=body, outline=edge, width=S)
+    # touch pad
+    d.rounded_rectangle([W * 0.38, H * 0.14, W * 0.62, H * 0.42], radius=S * 3, fill=(205, 205, 212, 255), outline=edge, width=S)
+    # sticks
+    for sx in (0.40, 0.60):
+        d.ellipse([W * sx - H * 0.12, H * 0.48, W * sx + H * 0.12, H * 0.72], fill=dark)
+        d.ellipse([W * sx - H * 0.07, H * 0.53, W * sx + H * 0.07, H * 0.67], fill=(70, 70, 76, 255))
+    # d-pad
+    cx, cy, a, b = W * 0.29, H * 0.33, H * 0.10, H * 0.035
+    d.rectangle([cx - a, cy - b, cx + a, cy + b], fill=dark)
+    d.rectangle([cx - b, cy - a, cx + b, cy + a], fill=dark)
+    # face buttons
+    cx, cy, o, r = W * 0.71, H * 0.33, H * 0.10, H * 0.052
+    for kind, (dx, dy) in (("triangle", (0, -1)), ("circle", (1, 0)), ("cross", (0, 1)), ("square", (-1, 0))):
+        x, y = cx + dx * o, cy + dy * o
+        d.ellipse([x - r, y - r, x + r, y + r], fill=dark)
+        col, s, lw = SYMBOL[kind] + (255,), r * 0.5, max(2, int(r * 0.22))
+        if kind == "cross":
+            d.line([x - s, y - s, x + s, y + s], fill=col, width=lw); d.line([x - s, y + s, x + s, y - s], fill=col, width=lw)
+        elif kind == "circle":
+            d.ellipse([x - s, y - s, x + s, y + s], outline=col, width=lw)
+        elif kind == "square":
+            d.rectangle([x - s * 0.85, y - s * 0.85, x + s * 0.85, y + s * 0.85], outline=col, width=lw)
+        else:
+            d.polygon([(x, y - s), (x + s, y + s * 0.7), (x - s, y + s * 0.7)], outline=col, width=lw)
+    return im.resize((w, h), Image.LANCZOS)
 
 
 def patches():
@@ -194,6 +258,8 @@ def patches():
             w = 28 if row < 3 else 32  # the game's "RS" sits a little further right
             art = np.array(stick_center(w, 28, "L" if row < 3 else "R"))
             out.append((1, x0, y0, w, 28, 1, art))
+    out.append((2, 0, 0, 128, 64, 0, np.array(controller())))
+    out.append((3, 0, 0, 128, 64, 0, np.array(controller_outline())))
     return out
 
 
