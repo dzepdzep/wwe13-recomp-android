@@ -26,8 +26,9 @@ import android.view.WindowManager;
  *
  * Shown according to the launcher's "Touch controls" setting: automatic (hidden while a controller is connected),
  * always or never. The overlay is a panel window, because the game surface is placed on top of the activity window.
- * The ✎ button (top right) opens the layout editor: drag any button, tap one and use − / + to resize it; the layout is
- * saved in the launcher's preferences ("touch_layout").
+ * The arrow (top right) collapses the buttons (only it and PAUSE stay) and brings them back; holding it opens the
+ * layout editor: drag any button, tap one and use − / + to resize it ("touch_layout" in the launcher's preferences).
+ * "Button size" (launcher) scales everything toward its corner, so the middle of the screen stays free.
  */
 final class TouchControls extends View implements InputManager.InputDeviceListener {
     // SDL_GamepadButton / SDL_GamepadAxis numbers.
@@ -80,9 +81,14 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             new Btn("▼", "", DOWN, GREY, false, 0.17f, 0.30f, 0.05f),
             // The right stick pad (drawn and handled separately; listed here so the editor can move and resize it).
             new Btn("", "", RS_PAD, GREY, true, 0.74f, 0.86f, 0.075f),
-            new Btn("✎", "", EDIT, GREY, true, 0.06f, 0.07f, 0.04f),
+            new Btn("▶", "", COLLAPSE, GREY, true, 0.055f, 0.065f, 0.04f),
     };
-    private static final int RS_PAD = 200, EDIT = 201;  // not gamepad buttons
+    private static final int RS_PAD = 200, COLLAPSE = 201;  // not gamepad buttons
+    private Btn collapseBtn() { return buttons[buttons.length - 1]; }
+    private float scale = 0.87f;  // "Button size": small / medium / large
+    private boolean collapsed;
+    private int collapsePointer = -1;
+    private boolean collapseLong;
     private Btn rsBtn() { return buttons[buttons.length - 2]; }
 
     // Movement stick: appears where the left thumb lands (left half, lower part). Right stick: fixed and small.
@@ -126,6 +132,8 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         this.activity = activity;
         this.prefs = prefs;
         this.vibrate = prefs.getBoolean("touch_vibrate", true);
+        this.scale = new float[] {0.72f, 0.87f, 1.0f}[Math.max(0, Math.min(2, prefs.getInt("touch_size", 1)))];
+        this.collapsed = prefs.getBoolean("touch_collapsed", false);
         loadLayout();
         this.mode = mode;
         this.alpha = alpha;
@@ -222,7 +230,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
         place();
-        stickR = 0.15f * h;
+        stickR = 0.15f * h * scale;
         ring.setStrokeWidth(Math.max(2f, h / 360f));
         float bw = 0.16f * h, bh = 0.09f * h, gap = 0.02f * h, x0 = w / 2f - 2 * bw - 1.5f * gap, y0 = 0.17f * h;
         for (int i = 0; i < 4; ++i) editBar[i] = new RectF(x0 + i * (bw + gap), y0, x0 + i * (bw + gap) + bw, y0 + bh);
@@ -233,13 +241,17 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         int w = getWidth(), h = getHeight();
         if (h == 0) return;
         for (Btn b : buttons) {
-            b.r = b.fr * h;
-            b.cx = b.fromRight ? w - b.fx * h : b.fx * h;
-            b.cy = b.fy * h;
+            float k = b.id == COLLAPSE ? 1f : scale;
+            b.r = b.fr * h * k;
+            b.cx = b.fromRight ? w - b.fx * h * k : b.fx * h * k;
+            b.cy = bottomAnchored(b) ? h - (1f - b.fy) * h * k : b.fy * h * k;
         }
         Btn rs = rsBtn();
         rsR = rs.r; rsCx = rs.cx; rsCy = rs.cy;
     }
+
+    /** Buttons in the lower part of the screen shrink toward the bottom edge, the others toward the top. */
+    private static boolean bottomAnchored(Btn b) { return b.dfy > 0.4f; }
 
     private void loadLayout() {
         String saved = prefs.getString("touch_layout", "");
@@ -303,7 +315,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         Btn best = null;
         float bestD = Float.MAX_VALUE;
         for (Btn b : buttons) {
-            if (b.id == RS_PAD) continue;
+            if (b.id == RS_PAD || (collapsed && b.id != COLLAPSE && b.id != START)) continue;
             float d = (float) Math.hypot(x - b.cx, y - b.cy);
             if (d < b.r * 1.15f && d < bestD) { best = b; bestD = d; }
         }
@@ -312,12 +324,24 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
 
     private void down(int pid, float x, float y) {
         Btn b = hit(x, y);
-        if (b != null && b.id == EDIT) {
-            releaseAll();
-            editing = true;
-            editSel = null;
+        if (b != null && b.id == COLLAPSE) {
+            // Tap: collapse / expand. Hold: layout editor.
+            collapsePointer = pid;
+            collapseLong = false;
+            handler.postDelayed(() -> {
+                if (collapsePointer != pid) return;
+                collapseLong = true;
+                releaseAll();
+                collapsed = false;
+                editing = true;
+                editSel = null;
+                place();
+                if (vibrate) performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                invalidate();
+            }, 700);
             return;
         }
+        if (collapsed && (b == null || b.id != START)) return;
         if (b != null && b.id == TRIGGER + AX_LT) {  // RUN: a toggle
             runToggled = !runToggled;
             updateLt();
@@ -368,6 +392,16 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     }
 
     private void up(int pid) {
+        if (pid == collapsePointer) {
+            collapsePointer = -1;
+            if (!collapseLong) {
+                releaseAll();
+                collapsed = !collapsed;
+                prefs.edit().putBoolean("touch_collapsed", collapsed).apply();
+                if (vibrate) performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+            }
+            return;
+        }
         if (pid == stickPointer) {
             stickPointer = -1;
             nativeAxis(AX_LX, 0); nativeAxis(AX_LY, 0);
@@ -452,7 +486,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
                 for (int i = 0; i < 4; ++i) {
                     if (!editBar[i].contains(x, y)) continue;
                     if (i < 2 && editSel != null) {
-                        editSel.fr = Math.max(0.035f, Math.min(0.2f, editSel.fr * (i == 0 ? 0.9f : 1.1f)));
+                        editSel.fr = Math.max(0.035f, Math.min(0.22f, editSel.fr * (i == 0 ? 0.9f : 1.1f)));
                     } else if (i == 2) {
                         for (Btn b : buttons) { b.fx = b.dfx; b.fy = b.dfy; b.fr = b.dfr; }
                         editSel = null;
@@ -467,7 +501,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
                 Btn best = null;
                 float bestD = Float.MAX_VALUE;
                 for (Btn b : buttons) {
-                    if (b.id == EDIT) continue;
+                    if (b.id == COLLAPSE) continue;
                     float d = (float) Math.hypot(x - b.cx, y - b.cy);
                     if (d < Math.max(b.r * 1.2f, getHeight() * 0.06f) && d < bestD) { best = b; bestD = d; }
                 }
@@ -487,8 +521,8 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
                     int w = getWidth(), h = getHeight();
                     float cx = Math.max(editDrag.r, Math.min(w - editDrag.r, e.getX(i) + editOffX));
                     float cy = Math.max(editDrag.r, Math.min(h - editDrag.r, e.getY(i) + editOffY));
-                    editDrag.fx = (editDrag.fromRight ? w - cx : cx) / h;
-                    editDrag.fy = cy / h;
+                    editDrag.fx = (editDrag.fromRight ? w - cx : cx) / (h * scale);
+                    editDrag.fy = bottomAnchored(editDrag) ? 1f - (h - cy) / (h * scale) : cy / (h * scale);
                     place();
                 }
                 break;
@@ -525,7 +559,8 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             c.drawRect(0, 0, getWidth(), getHeight(), fill);
         }
         for (Btn b : buttons) {
-            if (b.id == RS_PAD || (editing && b.id == EDIT)) continue;
+            if (b.id == RS_PAD || (editing && b.id == COLLAPSE)) continue;
+            if (collapsed && b.id != COLLAPSE && b.id != START) continue;
             boolean pressed = b.pointer >= 0 || (b.id == TRIGGER + AX_LT && ltDown) || (editing && b == editSel);
             fill.setColor(b.color);
             fill.setAlpha(pressed ? Math.min(255, a + 110) : a);
@@ -533,6 +568,11 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             ring.setAlpha(pressed ? 255 : Math.min(255, a + 60));
             c.drawCircle(b.cx, b.cy, b.r, ring);
             text.setAlpha(Math.min(255, a + 140));
+            if (b.id == COLLAPSE) {
+                text.setTextSize(b.r * 0.9f);
+                c.drawText(collapsed ? "◀" : "▶", b.cx, b.cy + b.r * 0.32f, text);
+                continue;
+            }
             float size = b.r * (b.label.length() > 6 ? 0.30f : 0.38f);
             if (b.label.length() == 1) size = b.r * 0.8f;
             text.setTextSize(size);
@@ -544,6 +584,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
                 c.drawText(b.sub, b.cx, b.label.length() == 1 ? b.cy + b.r + small.getTextSize() : ty + small.getTextSize() * 1.15f, small);
             }
         }
+        if (collapsed) return;
         // Right stick.
         fill.setColor(GREY);
         fill.setAlpha(a / 2);
@@ -603,7 +644,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             }
             small.setAlpha(255);
             small.setTextSize(getHeight() * 0.03f);
-            c.drawText("Drag a button to move it. Tap one, then − / + to resize.", getWidth() / 2f, editBar[0].top - getHeight() * 0.03f, small);
+            c.drawText("Drag a button to move it. Tap one, then − / + to resize. DONE saves.", getWidth() / 2f, editBar[0].top - getHeight() * 0.03f, small);
         }
     }
 }

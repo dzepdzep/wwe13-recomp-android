@@ -250,10 +250,12 @@ public class LauncherActivity extends Activity {
                 prefs.getInt("touch_mode", 0), i -> prefs.edit().putInt("touch_mode", i).apply()));
         settings.addView(spinnerRow("Touch controls opacity", new String[] {"Light (30%)", "Medium (50%)", "Strong (75%)"},
                 prefs.getInt("touch_opacity", 1), i -> prefs.edit().putInt("touch_opacity", i).apply()));
+        settings.addView(spinnerRow("Touch button size", new String[] {"Small", "Medium", "Large"},
+                prefs.getInt("touch_size", 1), i -> prefs.edit().putInt("touch_size", i).apply()));
         settings.addView(checkbox("Vibrate when a touch button is pressed", prefs.getBoolean("touch_vibrate", true),
                 c -> prefs.edit().putBoolean("touch_vibrate", c).apply()));
-        settings.addView(text("Touch controls: tap RUN to switch running on or off (or push the stick past its ring). Tap ✎ in "
-                + "the game's top-right corner to move and resize the buttons.", 13, DIM));
+        settings.addView(text("Touch controls: tap RUN to switch running on or off (or push the stick past its ring). The arrow "
+                + "in the game's top-right corner hides the buttons and brings them back; hold it to move and resize them.", 13, DIM));
         settings.addView(checkbox("Show an FPS counter in the game", prefs.getBoolean("show_fps", false),
                 c -> prefs.edit().putBoolean("show_fps", c).apply()));
         settings.addView(checkbox("Back up my saves before each start", prefs.getBoolean("auto_backup", true),
@@ -390,9 +392,13 @@ public class LauncherActivity extends Activity {
                     + "\nLast result: " + prefs.getString("sync_last", "not synced yet"));
         }
         backupList.removeAllViews();
-        for (String line : lines(LauncherNative.listBackups())) {
+        List<String> all = new ArrayList<>();
+        for (String line : lines(LauncherNative.listBackups())) if (line.split("\\|").length >= 2) all.add(line);
+        // Newest first; only the last three unless "Show all" was pressed.
+        all.sort((x, y) -> y.split("\\|")[1].compareTo(x.split("\\|")[1]));
+        int shown = showAllBackups ? all.size() : Math.min(3, all.size());
+        for (String line : all.subList(0, shown)) {
             final String[] p = line.split("\\|");
-            if (p.length < 2) continue;
             String label = p[1].replace('T', ' ') + (p.length > 3 && p[3].equals("1") ? "  (automatic)" : "");
             backupList.addView(listItem(label, "Restore", () -> confirm("Restore this backup? Your current saves are backed up first.", () -> {
                 String err = LauncherNative.restoreBackup(p[0]);
@@ -400,7 +406,14 @@ public class LauncherActivity extends Activity {
                 refresh();
             })));
         }
+        if (all.size() > 3) {
+            backupList.addView(button(showAllBackups ? "Show fewer" : "Show all (" + all.size() + ")", v -> {
+                showAllBackups = !showAllBackups;
+                refresh();
+            }), wrap(dp(4)));
+        }
     }
+    private boolean showAllBackups;
 
     private boolean gameReady() {
         String[] f = LauncherNative.status().split("\n", 2)[0].split("\\|");
