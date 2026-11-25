@@ -87,6 +87,7 @@ set(WWE13_SOURCES
   src/dlist_tripwire.cpp
   src/touch_pad.cpp
   src/ps_prompts.cpp
+  src/kickout.cpp
   src/d3d_layer_glue.cpp
   src/tiling_hooks.cpp
   src/perf_hint.cpp)

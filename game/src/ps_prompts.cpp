@@ -172,3 +172,11 @@ extern "C" PPC_FUNC(sub_82B38500) {
   if (size < 128 + 256 * 512 || size > (64u << 20)) return;
   PatchSheets(base + dest, size, dest);
 }
+
+// The generic part extractor sub_82B1E360 (pac_diag.cpp hooks it) copies stored parts as they are: game2dHD.pac keeps
+// the in-match icon sheet (GA2D/BASE part 2) stored, so the pause menu and the match HUD never went through the BPE
+// hook. pac_diag.cpp calls this after every part it extracts.
+void wwe13_ps_prompts_part(uint8_t* base, uint32_t dest, uint32_t size) {
+  if (!Enabled() || !dest || size < 128 + 256 * 512 || size > (64u << 20)) return;
+  PatchSheets(base + dest, size, dest);
+}

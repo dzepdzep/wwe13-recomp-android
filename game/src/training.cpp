@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <string>
 
 #include <rex/logging.h>
 #include "rex_compat.h"
@@ -27,6 +29,31 @@ bool wwe13_training() {
 
 // Called from the render-command hook (heap_diag.cpp, a guest thread, many times a frame): every 256th call.
 void wwe13_training_tick(uint8_t* base) {
+  // WWE13_OPT_PROBE=1: log the options block (22 sliders + what follows) when it changes; WWE13_OPT_SET="i:v,..."
+  // holds byte i at v (for finding what the hidden bytes do).
+  static const bool probe = [] { const char* e = std::getenv("WWE13_OPT_PROBE"); return e && *e == '1'; }();
+  if (probe) {
+    static uint32_t m = 0;
+    if ((++m & 1023) == 0) {
+      static uint8_t last[48] = {0xff};
+      uint8_t now[48];
+      for (int i = 0; i < 48; ++i) now[i] = PPC_LOAD_U8(kAiReversalRates + i);
+      if (std::memcmp(now, last, 48) != 0) {
+        std::memcpy(last, now, 48);
+        std::string d;
+        for (int i = 0; i < 48; ++i) d += fmt::format("{}{}", i ? " " : "", now[i]);
+        REXLOG_INFO("[wwe13-opt] {}", d);
+      }
+      if (const char* e = std::getenv("WWE13_OPT_SET")) {
+        int i = 0, v = 0, n = 0;
+        while (std::sscanf(e, "%d:%d%n", &i, &v, &n) == 2) {
+          if (i >= 0 && i < 48) PPC_STORE_U8(kAiReversalRates + i, uint8_t(v));
+          e += n;
+          if (*e == ',') ++e; else break;
+        }
+      }
+    }
+  }
   if (!wwe13_training()) return;
   static uint32_t n = 0;
   if ((++n & 255) != 0) return;

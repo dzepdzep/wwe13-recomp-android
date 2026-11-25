@@ -13,7 +13,9 @@
 
 extern "C" PPC_FUNC(__imp__sub_82B1E360);
 extern "C" PPC_FUNC(__imp__sub_82B1E228);
+void wwe13_ps_prompts_part(uint8_t* base, uint32_t dest, uint32_t size);  // ps_prompts.cpp
 extern "C" PPC_FUNC(sub_82B1E360) {
+  const uint32_t dest = ctx.r4.u32;
   const uint32_t pac = ctx.r3.u32, dest_size = ctx.r5.u32, index = ctx.r6.u32, name = ctx.r7.u32;
   if (pac && dest_size && index != 0xFFFFFFFFu) {
     PPCContext c = ctx;
@@ -42,4 +44,11 @@ extern "C" PPC_FUNC(sub_82B1E360) {
     }
   }
   __imp__sub_82B1E360(ctx, base);
+  if (pac && dest && ctx.r3.u32 && index != 0xFFFFFFFFu) {  // PlayStation icons on stored parts too
+    PPCContext c = ctx;
+    c.r3.u64 = pac;
+    c.r4.u64 = index;
+    __imp__sub_82B1E228(c, base);
+    wwe13_ps_prompts_part(base, dest, c.r3.u32);
+  }
 }
