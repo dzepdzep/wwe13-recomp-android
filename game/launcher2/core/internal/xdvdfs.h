@@ -20,6 +20,10 @@ struct XdvdfsEntry {
 
 class XdvdfsReader {
  public:
+  XdvdfsReader() = default;
+  ~XdvdfsReader();
+  XdvdfsReader(const XdvdfsReader&) = delete;
+  XdvdfsReader& operator=(const XdvdfsReader&) = delete;
   bool Open(const std::filesystem::path& image_path, std::string* error);
 
   const std::vector<XdvdfsEntry>& root_entries() const { return root_entries_; }
@@ -40,6 +44,7 @@ class XdvdfsReader {
 
   std::filesystem::path image_path_;
   std::ifstream stream_;
+  int fd_ = -1;  // Android: the picker's file handle ("/proc/self/fd/N"), read directly instead of re-opened by path
   uint64_t image_size_ = 0;
   uint64_t partition_offset_ = 0;
   uint64_t total_file_bytes_ = 0;

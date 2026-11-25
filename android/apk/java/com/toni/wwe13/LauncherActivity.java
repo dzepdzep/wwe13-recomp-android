@@ -246,6 +246,14 @@ public class LauncherActivity extends Activity {
         if (Features.EXTRAS)
             settings.addView(checkbox("Training mode: the CPU never reverses (plays on a copy of your save, your real save is not changed)",
                     prefs.getBoolean("training", false), c -> prefs.edit().putBoolean("training", c).apply()));
+        settings.addView(spinnerRow("Touch controls", new String[] {"Automatic (hidden while a controller is connected)", "Always on", "Off"},
+                prefs.getInt("touch_mode", 0), i -> prefs.edit().putInt("touch_mode", i).apply()));
+        settings.addView(spinnerRow("Touch controls opacity", new String[] {"Light (30%)", "Medium (50%)", "Strong (75%)"},
+                prefs.getInt("touch_opacity", 1), i -> prefs.edit().putInt("touch_opacity", i).apply()));
+        settings.addView(checkbox("Vibrate when a touch button is pressed", prefs.getBoolean("touch_vibrate", true),
+                c -> prefs.edit().putBoolean("touch_vibrate", c).apply()));
+        settings.addView(text("Touch controls: tap RUN to switch running on or off (or push the stick past its ring). Tap ✎ in "
+                + "the game's top-right corner to move and resize the buttons.", 13, DIM));
         settings.addView(checkbox("Show an FPS counter in the game", prefs.getBoolean("show_fps", false),
                 c -> prefs.edit().putBoolean("show_fps", c).apply()));
         settings.addView(checkbox("Back up my saves before each start", prefs.getBoolean("auto_backup", true),

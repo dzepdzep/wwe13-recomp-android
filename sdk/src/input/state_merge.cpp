@@ -38,9 +38,10 @@ void MergeInto(X_INPUT_STATE& dst, const X_INPUT_STATE& src) {
   dst.gamepad.thumb_rx = LargerMagnitude(dst.gamepad.thumb_rx, src.gamepad.thumb_rx);
   dst.gamepad.thumb_ry = LargerMagnitude(dst.gamepad.thumb_ry, src.gamepad.thumb_ry);
 
-  if (static_cast<uint32_t>(src.packet_number) > static_cast<uint32_t>(dst.packet_number)) {
-    dst.packet_number = src.packet_number;
-  }
+  // WWE13 (touch controls): the sum, not the larger of the two. Games re-read a pad only when its packet number
+  // changes; with the larger one, the device with the higher count (a handheld's built-in pad) hid every change of
+  // the other (the on-screen buttons). The sum changes whenever either device does.
+  dst.packet_number = static_cast<uint32_t>(dst.packet_number) + static_cast<uint32_t>(src.packet_number);
 }
 
 bool IsNeutral(const X_INPUT_GAMEPAD& gamepad) {

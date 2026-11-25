@@ -7,6 +7,12 @@
 #include <limits>
 #include <set>
 #include <system_error>
+#include <cerrno>
+#include <cstdlib>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #include <utility>
 
 namespace wwe13::launcher::internal {
@@ -72,6 +78,14 @@ bool IsNoSpaceError() {
 
 }  // namespace
 
+XdvdfsReader::~XdvdfsReader() {
+#ifndef _WIN32
+  if (fd_ >= 0) {
+    ::close(fd_);
+  }
+#endif
+}
+
 bool XdvdfsReader::Open(const std::filesystem::path& image_path, std::string* error) {
   if (error) {
     error->clear();
@@ -81,32 +95,76 @@ bool XdvdfsReader::Open(const std::filesystem::path& image_path, std::string* er
   total_file_bytes_ = 0;
   partition_offset_ = 0;
 
-  std::error_code filesystem_error;
-  if (std::filesystem::is_directory(image_path, filesystem_error)) {
-    if (error) {
-      *error = "Games-on-Demand folders are not supported yet.";
-    }
-    return false;
+#ifndef _WIN32
+  if (fd_ >= 0) {
+    ::close(fd_);
+    fd_ = -1;
   }
-  if (filesystem_error) {
-    if (error) {
-      *error = "The disc image could not be opened.";
+  // Android hands the launcher a picked file as "/proc/self/fd/N". Re-opening that path goes back through the storage
+  // layer, and some pickers (Samsung's My Files) refuse it for an app without storage permission: read from the
+  // handle itself instead.
+  const std::string path_text = image_path.string();
+  constexpr const char kFdPrefix[] = "/proc/self/fd/";
+  if (path_text.rfind(kFdPrefix, 0) == 0) {
+    const int source = std::atoi(path_text.c_str() + sizeof(kFdPrefix) - 1);
+    struct stat info {};
+    if (source < 0 || ::fstat(source, &info) != 0 || (fd_ = ::dup(source)) < 0) {
+      if (error) {
+        *error = "The disc image could not be opened.";
+      }
+      return false;
     }
-    return false;
-  }
-  image_size_ = std::filesystem::file_size(image_path, filesystem_error);
-  if (filesystem_error || image_size_ < (kDescriptorSector + 1) * kSectorSize) {
-    if (error) {
-      *error = "This is not an Xbox 360 disc image.";
+    if (S_ISDIR(info.st_mode)) {
+      if (error) {
+        *error = "Games-on-Demand folders are not supported yet.";
+      }
+      return false;
     }
-    return false;
-  }
-  stream_.open(image_path, std::ios::binary);
-  if (!stream_) {
-    if (error) {
-      *error = "The disc image could not be opened.";
+    off_t end = info.st_size > 0 ? static_cast<off_t>(info.st_size) : ::lseek(fd_, 0, SEEK_END);
+    if (end < 0) {
+      if (error) {
+        *error = "The file picker gave a stream that can't be read from any position. Copy the .iso to your Download "
+                 "folder and pick it with the Files app.";
+      }
+      return false;
     }
-    return false;
+    image_size_ = static_cast<uint64_t>(end);
+    if (image_size_ < (kDescriptorSector + 1) * kSectorSize) {
+      if (error) {
+        *error = "This is not an Xbox 360 disc image.";
+      }
+      return false;
+    }
+  } else
+#endif
+  {
+    std::error_code filesystem_error;
+    if (std::filesystem::is_directory(image_path, filesystem_error)) {
+      if (error) {
+        *error = "Games-on-Demand folders are not supported yet.";
+      }
+      return false;
+    }
+    if (filesystem_error) {
+      if (error) {
+        *error = "The disc image could not be opened.";
+      }
+      return false;
+    }
+    image_size_ = std::filesystem::file_size(image_path, filesystem_error);
+    if (filesystem_error || image_size_ < (kDescriptorSector + 1) * kSectorSize) {
+      if (error) {
+        *error = "This is not an Xbox 360 disc image.";
+      }
+      return false;
+    }
+    stream_.open(image_path, std::ios::binary);
+    if (!stream_) {
+      if (error) {
+        *error = "The disc image could not be opened.";
+      }
+      return false;
+    }
   }
 
   constexpr std::array<uint64_t, 3> kPartitionOffsets = {0, 0x02080000, 0x0FD90000};
@@ -302,6 +360,26 @@ bool XdvdfsReader::ReadAt(uint64_t offset, void* output, size_t size, std::strin
     }
     return false;
   }
+#ifndef _WIN32
+  if (fd_ >= 0) {
+    size_t done = 0;
+    while (done < size) {
+      const ssize_t got = ::pread(fd_, static_cast<char*>(output) + done, size - done,
+                                  static_cast<off_t>(offset + done));
+      if (got < 0 && errno == EINTR) {
+        continue;
+      }
+      if (got <= 0) {
+        if (error) {
+          *error = got < 0 ? "The disc image could not be read." : "The disc image is damaged or incomplete.";
+        }
+        return false;
+      }
+      done += static_cast<size_t>(got);
+    }
+    return true;
+  }
+#endif
   stream_.clear();
   stream_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
   if (!stream_) {

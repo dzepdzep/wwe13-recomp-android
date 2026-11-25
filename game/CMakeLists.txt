@@ -85,6 +85,7 @@ set(WWE13_SOURCES
   src/native_settings.cpp
   src/coherency_stub.cpp
   src/dlist_tripwire.cpp
+  src/touch_pad.cpp
   src/d3d_layer_glue.cpp
   src/tiling_hooks.cpp
   src/perf_hint.cpp)

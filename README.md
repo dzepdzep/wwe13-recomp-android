@@ -14,6 +14,10 @@ a Snapdragon 8 Gen 2 handheld (AYN Odin 2 Portal).
   Creations → Entrance → Finalize → Music → User Playlist.
 - Title update 2.0.1.0 and the DLC packs (if you own them).
 - Controllers (Bluetooth or built-in handheld controls).
+- **Touch controls** made for WWE '13: GRAPPLE, STRIKE, WHIP / PIN, FINISHER, REVERSAL, RUN (tap to switch on or off),
+  CLIMB / TAG, LIMB / ITEM, a taunt d-pad and a small right stick. They hide while a controller is connected (launcher
+  setting: Automatic / Always on / Off, plus opacity and vibration). Tap ✎ in the game's top-right corner to move and
+  resize the buttons.
 
 ## Requirements
 - An Android device with a Snapdragon (Adreno) GPU, Android 13 or newer, 64-bit. Tested on the AYN Odin 2 Portal.

@@ -4,6 +4,8 @@ import android.os.Bundle;
 import org.libsdl.app.SDLActivity;
 
 public class WWE13Activity extends SDLActivity {
+    private TouchControls touch;
+
     @Override
     protected String[] getLibraries() {
         // SDL3 is linked statically into libmain.so.
@@ -19,6 +21,15 @@ public class WWE13Activity extends SDLActivity {
         if (mSurface != null) {
             mSurface.setZOrderOnTop(true);
         }
+        // On-screen touch controls (launcher setting; hidden while a controller is connected by default).
+        touch = TouchControls.install(this);
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (touch != null) touch.stop();
+        touch = null;
+        super.onDestroy();
     }
 
     @Override
