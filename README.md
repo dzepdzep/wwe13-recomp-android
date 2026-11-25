@@ -14,6 +14,8 @@ a Snapdragon 8 Gen 2 handheld (AYN Odin 2 Portal).
   Creations → Entrance → Finalize → Music → User Playlist.
 - Title update 2.0.1.0 and the DLC packs (if you own them).
 - Controllers (Bluetooth or built-in handheld controls).
+- **CPU kick-outs** (launcher, GAME page): Normal / Fewer / Much fewer after big moves and finishers. Only the CPU's
+  kick-outs from your pins change; difficulty, reversals and your own kick-outs stay the same.
 - A launcher in the style of WWE '13 (PLAY, GRAPHICS, GAME, CONTROLS, MUSIC, SAVES, UPDATES pages).
 - **PlayStation button icons** (launcher setting): ✕ ○ □ △, L1/R1, L2/R2… instead of the Xbox icons. Our own artwork,
   swapped in as the game loads (menus, pause menu, match HUD and the select screen's controller pictures); no game

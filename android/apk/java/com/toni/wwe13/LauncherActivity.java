@@ -298,6 +298,11 @@ public class LauncherActivity extends Activity {
         if (Features.EXTRAS)
             settings.addView(checkbox("Training mode: the CPU never reverses (plays on a copy of your save, your real save is not changed)",
                     prefs.getBoolean("training", false), c -> prefs.edit().putBoolean("training", c).apply()));
+        settings.addView(spinnerRow("CPU kick-outs", new String[] {"Normal (like the original)", "Fewer after big moves",
+                        "Much fewer after big moves and finishers"},
+                prefs.getInt("cpu_kickouts", 0), i -> prefs.edit().putInt("cpu_kickouts", i).apply()));
+        settings.addView(text("Only changes how often the CPU kicks out of your pins after heavy damage or a finisher. "
+                + "Difficulty, reversals and your own kick-outs stay the same.", 13, DIM));
         settings.addView(spinnerRow("Button icons in the game", new String[] {"Xbox (A B X Y)", "PlayStation (✕ ○ □ △)"},
                 prefs.getInt("button_icons", 0), i -> prefs.edit().putInt("button_icons", i).apply()));
         // ---- CONTROLS
@@ -629,6 +634,7 @@ public class LauncherActivity extends Activity {
             env.append("WWE13_UNLOCK_ALL=").append(prefs.getBoolean("unlock_all", false) ? "1" : "").append('\n');
             env.append("WWE13_TRAINING=").append(Features.EXTRAS && prefs.getBoolean("training", false) ? "1" : "").append('\n');
             env.append("WWE13_PS_PROMPTS=").append(prefs.getInt("button_icons", 0) == 1 ? "1" : "").append('\n');
+            env.append("WWE13_AI_KICKOUT=").append(new String[] {"", "55", "10"}[Math.max(0, Math.min(2, prefs.getInt("cpu_kickouts", 0)))]).append('\n');
             env.append("WWE13_SHOW_FPS=").append(prefs.getBoolean("show_fps", false) ? "1" : "").append('\n');
             write(new File(root, "env.txt"), env.toString());
 
