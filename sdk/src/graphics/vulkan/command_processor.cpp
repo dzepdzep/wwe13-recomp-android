@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <algorithm>
+#include <future>
 #include <cmath>
 #include <array>
 #include <bit>
@@ -22655,4 +22656,69 @@ void VulkanCommandProcessor::GpuMarksShutdown() {
   gpu_marks_.reset();
 }
 
+// WWE '13 port: see ReadbackRangeForCpuNow in the header. Load-time only (a few calls per attire build): a fresh
+// host-visible buffer per call, the copy recorded and waited for at once.
+bool VulkanCommandProcessor::ReadbackRangeForCpuNow(uint32_t address, uint32_t length) {
+  if (!length || length > (64u << 20) || uint64_t(address) + length > SharedMemory::kBufferSize) return false;
+  if (texture_cache_ && texture_cache_->IsDrawResolutionScaled()) return false;
+  uint8_t* destination = memory_->TranslatePhysical(address);
+  if (!destination) return false;
+  const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  if (!ui::vulkan::util::CreateDedicatedAllocationBuffer(vulkan_device, AlignReadbackBufferSize(length),
+                                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                         ui::vulkan::util::MemoryPurpose::kReadback, buffer, memory)) {
+    return false;
+  }
+  void* mapping = nullptr;
+  bool ok = dfn.vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &mapping) == VK_SUCCESS;
+  if (ok && !submission_open_) ok = BeginSubmission(true);
+  if (ok) {
+    // Resolves whose write-back the native renderer skipped (texture-only, gpu_native_truth_skip_writeback) are written
+    // into the GPU's copy of memory first.
+    shared_memory_->CheckSkipped(address, length);
+    shared_memory_->Use(VulkanSharedMemory::Usage::kRead, {}, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    SubmitBarriers(true);
+    VkBufferCopy region = {};
+    region.srcOffset = address;
+    region.size = length;
+    deferred_command_buffer_.CmdVkCopyBuffer(shared_memory_->buffer(), buffer, 1, &region);
+    PushBufferMemoryBarrier(buffer, 0, length, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+    SubmitBarriers(true);
+    ok = AwaitAllQueueOperationsCompletion();
+  }
+  if (ok) {
+    VkMappedMemoryRange range = {};
+    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    range.memory = memory;
+    range.size = VK_WHOLE_SIZE;
+    dfn.vkInvalidateMappedMemoryRanges(device, 1, &range);
+    std::memcpy(destination, mapping, length);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+  }
+  if (mapping) dfn.vkUnmapMemory(device, memory);
+  dfn.vkDestroyBuffer(device, buffer, nullptr);
+  dfn.vkFreeMemory(device, memory, nullptr);
+  REXGPU_INFO("[wwe13][untile] read back 0x{:08X} ({} KB) for the CPU: {}, first words {:08X} {:08X}", address, length >> 10, ok ? "ok" : "FAILED", ok ? *reinterpret_cast<const uint32_t*>(destination) : 0u, ok ? *reinterpret_cast<const uint32_t*>(destination + length / 2) : 0u);
+  return ok;
+}
+
 }  // namespace rex::graphics::vulkan
+
+// WWE '13 port: for game code (libmain does not link this plugin; it finds this with dlsym). Runs
+// ReadbackRangeForCpuNow on the command thread and waits for it (at most 2 s). Returns 1 when the bytes were copied.
+extern "C" __attribute__((visibility("default"))) int wwe13_readback_range_for_cpu(void* command_processor,
+                                                                                   uint32_t address, uint32_t length) {
+  auto* cp = static_cast<rex::graphics::vulkan::VulkanCommandProcessor*>(
+      static_cast<rex::graphics::CommandProcessor*>(command_processor));
+  if (!cp) return 0;
+  auto done = std::make_shared<std::promise<bool>>();
+  auto result = done->get_future();
+  cp->CallInThread([cp, address, length, done]() { done->set_value(cp->ReadbackRangeForCpuNow(address, length)); });
+  if (result.wait_for(std::chrono::milliseconds(2000)) != std::future_status::ready) return 0;
+  return result.get() ? 1 : 0;
+}

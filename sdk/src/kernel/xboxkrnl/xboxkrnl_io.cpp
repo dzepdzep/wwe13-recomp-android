@@ -14,6 +14,11 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <cstdlib>
+#include <rex/cvar.h>
+#include <thread>
+#include <string_view>
+#include <string>
+#include <chrono>
 #include <rex/filesystem/device.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
@@ -32,6 +37,44 @@
 #include <rex/thread/mutex.h>
 
 namespace rex::kernel::xboxkrnl {
+
+// WWE '13 port (Attitude Era Shawn Michaels, black attire): the game builds some wrestlers' attires on the GPU right after
+// their character file (\PAC\CH\CHnnn.PAC) opens: 2048 / 1024 / 512-wide layers that it resolves and then untiles on
+// the CPU (XGUntileSurface). The native renderer keeps resolve results on the GPU, so the CPU read stale memory and the
+// body came out black with coloured stripes. A character file open now opens a short read-back window
+// (readback_resolve_override = 3, every resolve read back) that closes 2 s after the last such open; it falls in
+// loading screens, where the lower frame rate is not seen. WWE13_ATTIRE_WINDOW=0 turns it off.
+namespace {
+std::atomic<uint32_t> g_attire_generation{0};
+void AttireWindowOnOpen(const std::string_view path) {
+  static const bool enabled = [] {
+    const char* v = std::getenv("WWE13_ATTIRE_WINDOW");
+    return !(v && v[0] == '0');
+  }();
+  if (!enabled) return;
+  // ...\PAC\CH\CH<digits>.PAC (not CHETC*)
+  const size_t at = path.rfind("\\CH\\CH");
+  if (at == std::string_view::npos || at + 7 >= path.size()) return;
+  const char c = path[at + 7];
+  if (c < '0' || c > '9') return;
+  const std::string current = rex::cvar::GetFlagByName("readback_resolve_override");
+  const uint32_t generation = g_attire_generation.fetch_add(1) + 1;
+  if (current == "-1") {
+    rex::cvar::SetFlagByName("readback_resolve_override", "3");
+    REXKRNL_INFO("[wwe13][attire] read-back window opened ({})", path);
+  } else if (current != "3") {
+    return;  // the app or the user set another mode: leave it
+  }
+  std::thread([generation] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    if (g_attire_generation.load() != generation) return;  // a later open extended the window
+    if (rex::cvar::GetFlagByName("readback_resolve_override") == "3") {
+      rex::cvar::SetFlagByName("readback_resolve_override", "-1");
+      REXKRNL_INFO("[wwe13][attire] read-back window closed");
+    }
+  }).detach();
+}
+}  // namespace
 using namespace rex::system;
 
 struct CreateOptions {
@@ -180,6 +223,7 @@ u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
       if (n.fetch_add(1) < 600)
         REXKRNL_INFO("[open] {} ({} KB)", target_path, vfs_file->entry()->size() >> 10);
     }
+    AttireWindowOnOpen(target_path);
   }
   return result;
 }

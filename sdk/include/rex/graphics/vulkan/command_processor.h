@@ -98,6 +98,10 @@ struct CoverInputs {
 
 class VulkanCommandProcessor : public CommandProcessor {
  public:
+  // WWE '13 port: copies guest memory [address, address + length) from the GPU's shared memory into the CPU's copy, now
+  // (command thread; waits for the GPU). For game code that reads render-to-texture results on the CPU without a
+  // read-back (Attitude Era Shawn Michaels' attire: XGUntileSurface). False when it could not (scaled resolves).
+  bool ReadbackRangeForCpuNow(uint32_t address, uint32_t length);
   // wwe2k14 patch (Session 87, D3D layer F2): the copy-family record executor (native/d3d_copy_records.cpp). A friend
   // declaration only - no member, no layout change.
   friend struct D3dCopyAccess;

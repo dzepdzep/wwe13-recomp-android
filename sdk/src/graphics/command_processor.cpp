@@ -130,6 +130,9 @@ void D3dCensusFrame(uint32_t frame) {
 // the next one in PM4's unused tail: confirm with the same scan before merging).
 constexpr uint32_t kPm4D3dInline = 0x7E;  // (F2's PM4_D3D_COPY is 0x7D, F1's token 0x7C)
 }  // namespace
+
+// WWE '13 port: the no-ring drain (d3d_noring.cpp) hands the thread back to the loop when a CallInThread job waits.
+namespace rex::graphics { bool CpPendingFnsWaiting() { return PendingFnsWaiting(); } }
 // wwe2k14 patch (Session 77, cross-device determinism runs; Jarrod: "no drawing could be huge"): the command processor
 // still executes every packet (registers, interrupts, fences, waits, the frame swap) but records no host draw or copy
 // (resolve): no pipelines, textures or render passes. Under det_serial the command thread's work sits on the critical

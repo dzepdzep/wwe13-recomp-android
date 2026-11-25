@@ -33,6 +33,13 @@
 #include "native/diag_layer.h"  // wwe2k14 patch (Session 95, the diagnostic run)
 
 // wwe2k14 patch (Session 52): barrier merging at replay.
+// WWE '13 port (Turnip on Adreno 6xx GPU hangs, Retroid Pocket Flip 2): a full memory barrier (all commands -> all
+// commands, every write made visible) added while the stream replays, to find which kind of step races. Bits:
+// 1 after dispatches, 2 after transfers (copies / blits / image clears), 4 after render passes end, 8 before they begin.
+REXCVAR_DEFINE_INT32(vulkan_debug_full_barriers, 0, "GPU/Vulkan",
+                     "Diagnostic: full barriers while replaying (1 after dispatches, 2 after transfers, 4 after render "
+                     "passes, 8 before render passes)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_BOOL(vulkan_merge_adjacent_barriers, false, "GPU/Vulkan",
                     "Session 52: pipeline barriers recorded back to back (no other command between them) are executed "
                     "as one vkCmdPipelineBarrier: the stage masks ORed, the memory, buffer and image barriers together "
@@ -266,6 +273,16 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
     dfn.vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                              0, 0, nullptr, 0, nullptr, image_count, nowait_image.data());
   };
+  const int32_t full_barriers = REXCVAR_GET(vulkan_debug_full_barriers);
+  const auto full_barrier = [&](int32_t bit) {
+    if (!(full_barriers & bit)) return;
+    VkMemoryBarrier b = {};
+    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    dfn.vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
+                             &b, 0, nullptr, 0, nullptr);
+  };
   if constexpr (kDiag) diag::StreamBegin(command_buffer);
   while (stream_remaining) {
     const CommandHeader* header_ptr = reinterpret_cast<const CommandHeader*>(stream);
@@ -300,6 +317,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
           render_pass_begin_info.pClearValues = nullptr;
         }
         if constexpr (kDiag) diag::BeginPass(command_buffer, args.render_pass, args.framebuffer);
+        full_barrier(8);
         dfn.vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, args.contents);
       } break;
 
@@ -379,6 +397,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
             reinterpret_cast<const VkImageSubresourceRange*>(
                 reinterpret_cast<const uint8_t*>(stream) +
                 rex::align(sizeof(ArgsVkClearColorImage), alignof(VkImageSubresourceRange))));
+        full_barrier(2);
       } break;
 
       case Command::kVkCopyBuffer: {
@@ -387,6 +406,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
                             reinterpret_cast<const VkBufferCopy*>(
                                 reinterpret_cast<const uint8_t*>(stream) +
                                 rex::align(sizeof(ArgsVkCopyBuffer), alignof(VkBufferCopy))));
+        full_barrier(2);
       } break;
 
       case Command::kVkCopyBufferToImage: {
@@ -397,6 +417,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
             reinterpret_cast<const VkBufferImageCopy*>(
                 reinterpret_cast<const uint8_t*>(stream) +
                 rex::align(sizeof(ArgsVkCopyBufferToImage), alignof(VkBufferImageCopy))));
+        full_barrier(2);
       } break;
 
       // wwe2k14 patch (Session 18, DLAA).
@@ -414,12 +435,14 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
                            reinterpret_cast<const VkImageCopy*>(
                                reinterpret_cast<const uint8_t*>(stream) +
                                rex::align(sizeof(ArgsVkCopyImage), alignof(VkImageCopy))));
+        full_barrier(2);
       } break;
 
       // wwe2k14 patch (Session 54, NATIVE without interlock).
       case Command::kVkClearDepthStencilImage: {
         auto& args = *reinterpret_cast<const ArgsVkClearDepthStencilImage*>(stream);
         dfn.vkCmdClearDepthStencilImage(command_buffer, args.image, args.image_layout, &args.value, 1, &args.range);
+        full_barrier(2);
       } break;
 
       // wwe2k14 patch (Session 54, NATIVE draw sizes).
@@ -431,6 +454,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
                                reinterpret_cast<const uint8_t*>(stream) +
                                rex::align(sizeof(ArgsVkBlitImage), alignof(VkImageBlit))),
                            args.filter);
+        full_barrier(2);
       } break;
 
       // wwe2k14 patch (Session 7c, TEXDIRECT).
@@ -442,6 +466,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
             reinterpret_cast<const VkBufferImageCopy*>(
                 reinterpret_cast<const uint8_t*>(stream) +
                 rex::align(sizeof(ArgsVkCopyImageToBuffer), alignof(VkBufferImageCopy))));
+        full_barrier(2);
       } break;
 
       case Command::kVkCopyQueryPoolResults: {
@@ -455,6 +480,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
         auto& args = *reinterpret_cast<const ArgsVkDispatch*>(stream);
         dfn.vkCmdDispatch(command_buffer, args.group_count_x, args.group_count_y,
                           args.group_count_z);
+        full_barrier(1);
       } break;
 
       case Command::kVkDraw: {
@@ -481,6 +507,7 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
 
       case Command::kVkEndRenderPass:
         dfn.vkCmdEndRenderPass(command_buffer);
+        full_barrier(4);
         if constexpr (kDiag) diag::EndPass(command_buffer);
         break;
 
@@ -517,11 +544,13 @@ void DeferredCommandBuffer::ExecuteStreamT(const std::vector<uintmax_t>& command
         rendering_info.pDepthAttachment = depth_attachment;
         rendering_info.pStencilAttachment = stencil_attachment;
         if constexpr (kDiag) diag::BeginDynamicPass(command_buffer, rendering_info);
+        full_barrier(8);
         dfn.vkCmdBeginRendering(command_buffer, &rendering_info);
       } break;
 
       case Command::kVkEndRendering:
         dfn.vkCmdEndRendering(command_buffer);
+        full_barrier(4);
         if constexpr (kDiag) diag::EndPass(command_buffer);
         break;
 

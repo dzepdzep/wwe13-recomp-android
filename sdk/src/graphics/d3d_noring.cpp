@@ -1052,6 +1052,8 @@ void CommandProcessor::D3dNoringGateRelease(int how, bool publish) {
 
 // Pops and runs everything queued. True if anything ran.
 bool CpSafePointDue();  // command_processor.cpp (WWE '13 port)
+bool CpPendingFnsWaiting();  // command_processor.cpp
+
 bool CommandProcessor::D3dNoringDrain() {
   D3dNoringShared* s = Shared();
   if (!s) return false;
@@ -1180,6 +1182,7 @@ bool CommandProcessor::D3dNoringDrain() {
     head += total;
     s->head.store(head, std::memory_order_release);  // (the producer may reuse the entry's storage from here)
     if (!worker_running_) break;
+    if (CpPendingFnsWaiting()) break;  // WWE '13 port: a CallInThread job (the untile read-back) runs first
     if (head == tail) tail = s->tail.load(std::memory_order_acquire);
   }
   if (g_cut && scout_hooks.scout_leave) scout_hooks.scout_leave();

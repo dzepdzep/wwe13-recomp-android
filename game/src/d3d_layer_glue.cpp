@@ -75,10 +75,14 @@ REX_HOOK_RAW(sub_82B9D540) {
   }();
   rex::perf::timeline::Scope wwe13_tl_bof("bof_b", "bof_e", uint32_t(ctx.lr), ctx.r4.u32);
   if (depth >= 2 && uint32_t(ctx.lr) == 0x82B9B9C8u) {
-    static uint32_t older = 0;
+    // Wait for the fence of the present (depth - 1) calls back (0 = none yet): depth 2 = as before, the one before the previous.
+    static uint32_t ring[8] = {};
+    static uint32_t n = 0;
+    const uint32_t d = uint32_t(depth > 8 ? 8 : depth);
     const uint32_t previous = ctx.r4.u32;  // the previous present's fence
-    ctx.r4.u64 = older;                    // wait for the one before it (0 = no wait)
-    older = previous;
+    ctx.r4.u64 = n >= d - 1 ? ring[(n - (d - 1)) & 7] : 0;
+    ring[n & 7] = previous;
+    ++n;
   }
   __imp__sub_82B9D540(ctx, base);
 }

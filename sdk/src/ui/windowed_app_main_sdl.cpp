@@ -37,6 +37,8 @@
 #if REX_PLATFORM_ANDROID
 #include <android/log.h>
 #include <dlfcn.h>
+#include <sys/system_properties.h>
+#include <cstring>
 #include <unistd.h>
 
 #include <cstdio>
@@ -367,6 +369,32 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* a
   // Custom GPU driver (Mesa Turnip): <internal>/drivers/<name>/, chosen in drivers/current.txt.
   if (const char* forced = std::getenv("REX_VULKAN_DRIVER"); forced && *forced) g_vk_driver = forced;
   else SelectCustomDriver();
+  // WWE13: Turnip on Adreno 6xx (Snapdragon 865 / 870 / 888, Adreno 650/660) loses push constants with its "shared
+  // consts" (the EDRAM dump/resolve shaders then see zero pitches: a black or garbled picture). Per-stage push constants
+  // fix it (tested on a Retroid Pocket Flip 2, Adreno 650: correct picture, demo match 22 -> 49 fps vs the stock driver).
+  // Still open: Turnip on the Flip 2 then hits "GPU faulted or hung" (VK_ERROR_DEVICE_LOST) a minute or two into matches
+  // (not fixed by nolrz / sysmem / full barriers between passes; TU_DEBUG flushall+syncdraw avoids it at ~20 fps). The
+  // launcher therefore defaults Adreno 6xx to the phone's own driver.
+  // Only Adreno 6xx, and only when the user did not set TU_DEBUG themselves (env_user.txt).
+  if (!g_vk_driver.empty() && !std::getenv("TU_DEBUG")) {
+    char model[64] = {};
+    if (FILE* f = std::fopen("/sys/class/kgsl/kgsl-3d0/gpu_model", "r")) {
+      if (!std::fgets(model, sizeof(model), f)) model[0] = 0;
+      std::fclose(f);
+    }
+    if (!model[0]) {  // gpu_model unreadable: the Snapdragon platforms with an Adreno 6xx
+      char plat[PROP_VALUE_MAX] = {};
+      __system_property_get("ro.board.platform", plat);
+      for (const char* p : {"kona", "lahaina", "msmnile", "lito"})
+        if (std::strcmp(plat, p) == 0) std::snprintf(model, sizeof(model), "Adreno6xx (%s)", plat);
+    }
+    if (std::strncmp(model, "Adreno6", 7) == 0) {
+      setenv("TU_DEBUG", "push_consts_per_stage", 1);
+      __android_log_print(ANDROID_LOG_INFO, "wwe13", "Turnip on %s: TU_DEBUG=push_consts_per_stage", model);
+    } else {
+      __android_log_print(ANDROID_LOG_INFO, "wwe13", "GPU model '%s': Turnip defaults", model);
+    }
+  }
   {
     Dl_info info{};
     if (dladdr(reinterpret_cast<void*>(&SDL_main), &info) && info.dli_fname)

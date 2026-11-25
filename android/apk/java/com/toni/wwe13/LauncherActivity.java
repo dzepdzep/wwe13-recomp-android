@@ -735,15 +735,38 @@ public class LauncherActivity extends Activity {
         return ids;
     }
 
+    /** Adreno 6xx (Snapdragon 865 / 870 / 888 ...): Turnip renders there now, but hangs the GPU after a minute or two
+     *  (Retroid Pocket Flip 2), so these default to the phone's own driver. */
+    private static Boolean adreno6xx;
+    static boolean isAdreno6xx() {
+        if (adreno6xx == null) {
+            String model = "";
+            try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader("/sys/class/kgsl/kgsl-3d0/gpu_model"))) {
+                String line = r.readLine();
+                if (line != null) model = line.trim();
+            } catch (Exception ignored) {
+            }
+            boolean six = model.startsWith("Adreno6");
+            if (model.isEmpty()) {
+                String board = android.os.Build.BOARD == null ? "" : android.os.Build.BOARD.toLowerCase(java.util.Locale.ROOT);
+                String hw = android.os.Build.HARDWARE == null ? "" : android.os.Build.HARDWARE.toLowerCase(java.util.Locale.ROOT);
+                for (String p : new String[] {"kona", "lahaina", "msmnile", "lito"}) if (board.equals(p) || hw.equals(p)) six = true;
+            }
+            adreno6xx = six;
+        }
+        return adreno6xx;
+    }
+
     private String driverLabel(String id) {
-        if (id.equals(BUNDLED_DRIVER)) return "Turnip T30 (recommended)";
-        if (id.equals("system")) return "Phone's own driver";
+        if (id.equals(BUNDLED_DRIVER)) return isAdreno6xx() ? "Turnip T30 (faster, may crash on this GPU)" : "Turnip T30 (recommended)";
+        if (id.equals("system")) return isAdreno6xx() ? "Phone's own driver (recommended)" : "Phone's own driver";
         return id.replace('_', ' ');
     }
 
     private String currentDriver() {
         String id = prefs.getString("driver_name", null);
-        if (id == null) id = prefs.getInt("driver", 0) == 1 ? "system" : BUNDLED_DRIVER;  // older settings
+        if (id == null && prefs.contains("driver")) id = prefs.getInt("driver", 0) == 1 ? "system" : BUNDLED_DRIVER;  // older settings
+        if (id == null) id = isAdreno6xx() ? "system" : BUNDLED_DRIVER;
         if (!id.equals("system") && !new File(getFilesDir(), "drivers/" + id).isDirectory()) id = BUNDLED_DRIVER;
         return id;
     }
