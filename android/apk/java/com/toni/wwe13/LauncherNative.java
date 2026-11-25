@@ -32,6 +32,8 @@ final class LauncherNative {
     static native String backupSaves();
     /** One line per backup: "path|when|bytes|auto". */
     static native String listBackups();
+    static native String backupSavesAuto();
+    static native int deleteOldBackups(int keep);
     static native String restoreBackup(String path);
     /** Packs saves and creations into a backup-format zip (same format as the PC launcher's backups). */
     static native String exportSaves(String path);

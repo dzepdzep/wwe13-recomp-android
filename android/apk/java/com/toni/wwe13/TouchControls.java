@@ -81,11 +81,11 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             new Btn("▼", "", DOWN, GREY, false, 0.17f, 0.30f, 0.05f),
             // The right stick pad (drawn and handled separately; listed here so the editor can move and resize it).
             new Btn("", "", RS_PAD, GREY, true, 0.74f, 0.86f, 0.075f),
-            new Btn("▶", "", COLLAPSE, GREY, true, 0.055f, 0.065f, 0.04f),
+            new Btn("HIDE", "", COLLAPSE, GREY, true, 0.10f, 0.055f, 0.04f),
     };
     private static final int RS_PAD = 200, COLLAPSE = 201;  // not gamepad buttons
     private Btn collapseBtn() { return buttons[buttons.length - 1]; }
-    private float scale = 0.87f;  // "Button size": small / medium / large
+    private float scale = 0.70f;  // "Button size": small / medium / large
     private boolean collapsed;
     private int collapsePointer = -1;
     private boolean collapseLong;
@@ -116,6 +116,18 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     private final android.content.SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean attached, added, shown;
+    private boolean editorOnly;  // the launcher's "Edit touch layout": no game, DONE closes the screen
+
+    /** The layout editor on its own, for the launcher (TouchLayoutActivity). */
+    static TouchControls editor(Activity activity) {
+        android.content.SharedPreferences p = activity.getSharedPreferences("launcher", Context.MODE_PRIVATE);
+        TouchControls t = new TouchControls(activity, p, 1, 0.75f);
+        t.editorOnly = true;
+        t.shown = true;
+        t.editing = true;
+        t.collapsed = false;
+        return t;
+    }
 
     static TouchControls install(Activity activity) {
         android.content.SharedPreferences p = activity.getSharedPreferences("launcher", Context.MODE_PRIVATE);
@@ -132,7 +144,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         this.activity = activity;
         this.prefs = prefs;
         this.vibrate = prefs.getBoolean("touch_vibrate", true);
-        this.scale = new float[] {0.72f, 0.87f, 1.0f}[Math.max(0, Math.min(2, prefs.getInt("touch_size", 1)))];
+        this.scale = new float[] {0.58f, 0.70f, 0.85f}[Math.max(0, Math.min(2, prefs.getInt("touch_size", 1)))];
         this.collapsed = prefs.getBoolean("touch_collapsed", false);
         loadLayout();
         this.mode = mode;
@@ -317,6 +329,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         for (Btn b : buttons) {
             if (b.id == RS_PAD || (collapsed && b.id != COLLAPSE && b.id != START)) continue;
             float d = (float) Math.hypot(x - b.cx, y - b.cy);
+            if (b.id == COLLAPSE && Math.abs(x - b.cx) < b.r * 2f && Math.abs(y - b.cy) < b.r * 1.1f) d = 0;
             if (d < b.r * 1.15f && d < bestD) { best = b; bestD = d; }
         }
         return best;
@@ -493,6 +506,11 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
                     } else if (i == 3) {
                         editing = false;
                         editSel = null;
+                        if (editorOnly) {
+                            saveLayout();
+                            activity.finish();
+                            return;
+                        }
                     }
                     saveLayout();
                     place();
@@ -553,6 +571,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     protected void onDraw(Canvas c) {
         if (!shown) return;
         int a = (int) (alpha * 255);
+        if (editorOnly) c.drawColor(0xFF1B1B1F);
         if (editing) {
             fill.setColor(Color.BLACK);
             fill.setAlpha(110);
@@ -568,11 +587,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             ring.setAlpha(pressed ? 255 : Math.min(255, a + 60));
             c.drawCircle(b.cx, b.cy, b.r, ring);
             text.setAlpha(Math.min(255, a + 140));
-            if (b.id == COLLAPSE) {
-                text.setTextSize(b.r * 0.9f);
-                c.drawText(collapsed ? "◀" : "▶", b.cx, b.cy + b.r * 0.32f, text);
-                continue;
-            }
+            if (b.id == COLLAPSE) continue;  // drawn below as a pill
             float size = b.r * (b.label.length() > 6 ? 0.30f : 0.38f);
             if (b.label.length() == 1) size = b.r * 0.8f;
             text.setTextSize(size);
@@ -583,6 +598,17 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
                 small.setAlpha(Math.min(255, a + 100));
                 c.drawText(b.sub, b.cx, b.label.length() == 1 ? b.cy + b.r + small.getTextSize() : ty + small.getTextSize() * 1.15f, small);
             }
+        }
+        if (!editing && !editorOnly) {
+            // HIDE / SHOW pill (top right): tap to hide or show the buttons, hold to edit the layout.
+            Btn cb = collapseBtn();
+            RectF pill = new RectF(cb.cx - cb.r * 1.9f, cb.cy - cb.r * 0.75f, cb.cx + cb.r * 1.9f, cb.cy + cb.r * 0.75f);
+            fill.setColor(GREY);
+            fill.setAlpha(collapsePointer >= 0 ? 230 : Math.min(255, a + 40));
+            c.drawRoundRect(pill, cb.r, cb.r, fill);
+            text.setAlpha(255);
+            text.setTextSize(cb.r * 0.62f);
+            c.drawText(collapsed ? "SHOW ▾" : "HIDE ▴", cb.cx, cb.cy + cb.r * 0.22f, text);
         }
         if (collapsed) return;
         // Right stick.

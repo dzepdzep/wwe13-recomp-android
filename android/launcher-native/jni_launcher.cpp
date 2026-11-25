@@ -148,6 +148,22 @@ FN(jstring, backupSaves)(JNIEnv* env, jclass) {
   lc::BackupInfo info;
   return R(env, lc::BackupSaves(g_paths, false, &info));
 }
+// The backup made before each start: automatic, so only the newest 20 of them are kept.
+FN(jstring, backupSavesAuto)(JNIEnv* env, jclass) {
+  lc::BackupInfo info;
+  return R(env, lc::BackupSaves(g_paths, true, &info));
+}
+// Deletes every backup but the newest `keep` (the user confirms this in the launcher). Returns how many were deleted.
+FN(jint, deleteOldBackups)(JNIEnv*, jclass, jint keep) {
+  auto all = lc::ListBackups(g_paths);
+  std::sort(all.begin(), all.end(), [](const lc::BackupInfo& a, const lc::BackupInfo& b) { return a.when > b.when; });
+  int deleted = 0;
+  for (size_t i = size_t(keep < 0 ? 0 : keep); i < all.size(); ++i) {
+    std::error_code error;
+    if (std::filesystem::remove(all[i].file, error)) ++deleted;
+  }
+  return deleted;
+}
 // One line per backup: "path|when|bytes|auto"
 FN(jstring, listBackups)(JNIEnv* env, jclass) {
   std::ostringstream o;

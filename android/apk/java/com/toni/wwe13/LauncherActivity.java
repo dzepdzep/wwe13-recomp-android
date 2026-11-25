@@ -252,13 +252,14 @@ public class LauncherActivity extends Activity {
                 prefs.getInt("touch_opacity", 1), i -> prefs.edit().putInt("touch_opacity", i).apply()));
         settings.addView(spinnerRow("Touch button size", new String[] {"Small", "Medium", "Large"},
                 prefs.getInt("touch_size", 1), i -> prefs.edit().putInt("touch_size", i).apply()));
+        settings.addView(button("Edit touch layout…", v -> startActivity(new Intent(this, TouchLayoutActivity.class))), wrap(dp(4)));
         settings.addView(checkbox("Vibrate when a touch button is pressed", prefs.getBoolean("touch_vibrate", true),
                 c -> prefs.edit().putBoolean("touch_vibrate", c).apply()));
-        settings.addView(text("Touch controls: tap RUN to switch running on or off (or push the stick past its ring). The arrow "
-                + "in the game's top-right corner hides the buttons and brings them back; hold it to move and resize them.", 13, DIM));
+        settings.addView(text("Touch controls: tap RUN to switch running on or off (or push the stick past its ring). HIDE / SHOW "
+                + "in the game's top-right corner hides the buttons and brings them back; hold it (or use Edit touch layout) to move and resize them.", 13, DIM));
         settings.addView(checkbox("Show an FPS counter in the game", prefs.getBoolean("show_fps", false),
                 c -> prefs.edit().putBoolean("show_fps", c).apply()));
-        settings.addView(checkbox("Back up my saves before each start", prefs.getBoolean("auto_backup", true),
+        settings.addView(checkbox("Back up my saves before each start (the newest 20 are kept)", prefs.getBoolean("auto_backup", true),
                 c -> prefs.edit().putBoolean("auto_backup", c).apply()));
         settings.addView(text("The first start prepares the game's graphics shaders (about 25 seconds on a black screen) so "
                 + "menus and matches don't stutter. Later starts reuse them and take about a second.", 13, DIM));
@@ -406,12 +407,22 @@ public class LauncherActivity extends Activity {
                 refresh();
             })));
         }
+        LinearLayout more = row();
         if (all.size() > 3) {
-            backupList.addView(button(showAllBackups ? "Show fewer" : "Show all (" + all.size() + ")", v -> {
+            more.addView(button(showAllBackups ? "Show fewer" : "Show all (" + all.size() + ")", v -> {
                 showAllBackups = !showAllBackups;
                 refresh();
-            }), wrap(dp(4)));
+            }));
         }
+        if (all.size() > 20) {
+            more.addView(button("Delete old backups (keep the newest 20)", v -> confirm(
+                    "Delete " + (all.size() - 20) + " old save backups? The newest 20 are kept. This can't be undone.", () -> {
+                        int n = LauncherNative.deleteOldBackups(20);
+                        toastDialog(n + " old backups deleted.");
+                        refresh();
+                    })));
+        }
+        if (more.getChildCount() > 0) backupList.addView(more, wrap(dp(4)));
     }
     private boolean showAllBackups;
 
@@ -454,7 +465,7 @@ public class LauncherActivity extends Activity {
             drivers.mkdirs();
             write(new File(drivers, "current.txt"), currentDriver());
 
-            if (prefs.getBoolean("auto_backup", true)) LauncherNative.backupSaves();
+            if (prefs.getBoolean("auto_backup", true)) LauncherNative.backupSavesAuto();
         } catch (Exception e) {
             toastDialog("Could not save the settings: " + e.getMessage());
             return;
@@ -513,7 +524,7 @@ public class LauncherActivity extends Activity {
     }
 
     private void resolveSync(boolean keepDevice, Runnable next) {
-        if (!keepDevice) LauncherNative.backupSaves();
+        if (!keepDevice) LauncherNative.backupSavesAuto();
         new Thread(() -> {
             SaveSync.Result r = SaveSync.sync(this, keepDevice, false);
             handler.post(() -> {

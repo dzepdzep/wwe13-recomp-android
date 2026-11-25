@@ -229,7 +229,7 @@ struct BackupInfo {
   bool automatic = false;
 };
 std::vector<BackupInfo> ListBackups(const Paths& paths);
-// automatic: keep the newest 5. include_creations=false (the pre-launch backup) skips imported creation
+// automatic: keep the newest 20. include_creations=false (the pre-launch backup) skips imported creation
 // packages and marks the zip "saves only"; restoring such a zip keeps the installed creations.
 Result BackupSaves(const Paths& paths, bool automatic, BackupInfo* created, bool include_creations = true);
 // Packs the saves (and creations) into a backup-format zip at destination, for save sync.

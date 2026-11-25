@@ -237,7 +237,7 @@ Result BackupSaves(const Paths& paths, bool automatic, BackupInfo* created, bool
     if (automatic) {
       std::vector<BackupInfo> automatic_backups;
       for (const auto& backup : ListBackups(paths)) if (backup.automatic) automatic_backups.push_back(backup);
-      for (size_t index = 5; index < automatic_backups.size(); ++index) {
+      for (size_t index = 20; index < automatic_backups.size(); ++index) {
         std::error_code error;
         fs::remove(automatic_backups[index].file, error);
       }
